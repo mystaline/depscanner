@@ -15,6 +15,7 @@ type CallSite struct {
 	Line     int
 	Column   int
 	FuncName string // the resolved function name (e.g. "helper.Must")
+	ArgCount int    // number of arguments in the call
 }
 
 // ScanCallSites walks a repo directory and finds all call sites of funcName
@@ -128,6 +129,7 @@ func ScanCallSites(repoDir, targetModule, funcName string) ([]CallSite, []string
 				Line:     pos.Line,
 				Column:   pos.Column,
 				FuncName: resolvedName,
+				ArgCount: len(call.Args),
 			})
 
 			return true

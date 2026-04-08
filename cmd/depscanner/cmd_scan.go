@@ -36,6 +36,7 @@ type callSiteResult struct {
 	Line     int    `json:"line"`
 	Column   int    `json:"column"`
 	FuncName string `json:"func_name"`
+	ArgCount int    `json:"arg_count"`
 }
 
 type repoScanResult struct {
@@ -57,8 +58,9 @@ type scanOutput struct {
 	Repos           []repoScanResult        `json:"repos"`
 	TargetModule    string                  `json:"target_module"`
 	Branch          string                  `json:"branch,omitempty"`
-	FuncName     string                   `json:"func_name,omitempty"`
-	Total        int                      `json:"total"`
+	FuncName        string                  `json:"func_name,omitempty"`
+	TargetSignature *analysis.FuncSignature `json:"target_signature,omitempty"`
+	Total           int                     `json:"total"`
 	GoModCount      int                     `json:"go_mod_count"`
 	TargetCount     int                     `json:"target_count"`
 }
@@ -72,6 +74,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&branch, "branch", "", "scan a specific branch (enables staleness detection)")
 	cmd.Flags().BoolVar(&packages, "packages", false, "show which sub-packages of the target module are imported")
 	cmd.Flags().StringVar(&funcName, "func", "", "search for call sites of a specific function (e.g. \"Must\" or \"helper.Must\")")
+	cmd.Flags().BoolVar(&check, "check", false, "check call-site signatures against target module (requires --func)")
 	return cmd
 }
 
@@ -141,6 +144,37 @@ func runScan(_ *cobra.Command, _ []string) error {
 		fmt.Println()
 	}
 
+	// If --check is active, parse the target module's signature.
+	var targetSig *analysis.FuncSignature
+	if funcName != "" && check {
+		targetOwner, targetRepo := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
+		if targetOwner != "" {
+			targetPath := mgr.GetRepoPath(targetRepo)
+			// Ensure it exists locally
+			if _, statErr := os.Stat(targetPath); statErr != nil {
+				fmt.Printf("Syncing target module for signature check...\n")
+				_, syncErr := mgr.SyncBranch(targetRepo, fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo), targetBranch)
+				if syncErr != nil {
+					fmt.Fprintf(os.Stderr, "  warn: failed to sync target module: %v\n", syncErr)
+				}
+			}
+
+			sig, sigErr := analysis.ParseSignature(targetPath, funcName)
+			if sigErr != nil {
+				fmt.Fprintf(os.Stderr, "  warn: could not parse signature for %q: %v\n", funcName, sigErr)
+			} else {
+				targetSig = sig
+				fmt.Printf("Parsed signature for %q: %d params%s\n\n",
+					funcName, sig.ParamsCount, func() string {
+						if sig.IsVariadic {
+							return "+"
+						}
+						return ""
+					}())
+			}
+		}
+	}
+
 	var results []repoScanResult
 	goModCount := 0
 	targetCount := 0
@@ -195,6 +229,7 @@ func runScan(_ *cobra.Command, _ []string) error {
 					Line:     s.Line,
 					Column:   s.Column,
 					FuncName: s.FuncName,
+					ArgCount: s.ArgCount,
 				})
 			}
 		}
@@ -220,8 +255,9 @@ func runScan(_ *cobra.Command, _ []string) error {
 			Repos:           results,
 			TargetModule:    cfg.TargetModule,
 			Branch:          branch,
-			FuncName:     funcName,
-			Total:        len(results),
+			FuncName:        funcName,
+			TargetSignature: targetSig,
+			Total:           len(results),
 			GoModCount:      goModCount,
 			TargetCount:     targetCount,
 		})
@@ -294,7 +330,22 @@ func runScan(_ *cobra.Command, _ []string) error {
 				totalSites += len(r.CallSites)
 				fmt.Printf("\n  %s%s%s (%d call sites):\n", colorGreen, r.Name, colorReset, len(r.CallSites))
 				for _, cs := range r.CallSites {
-					fmt.Printf("    %s:%d  %s\n", cs.File, cs.Line, cs.FuncName)
+					matchStr := ""
+					if targetSig != nil {
+						match := false
+						if targetSig.IsVariadic {
+							match = cs.ArgCount >= targetSig.ParamsCount-1
+						} else {
+							match = cs.ArgCount == targetSig.ParamsCount
+						}
+
+						if match {
+							matchStr = fmt.Sprintf("  %s✓ %d args%s", colorGreen, cs.ArgCount, colorReset)
+						} else {
+							matchStr = fmt.Sprintf("  %s✗ %d args (expected %d)%s", colorRed, cs.ArgCount, targetSig.ParamsCount, colorReset)
+						}
+					}
+					fmt.Printf("    %s:%d  %s%s\n", cs.File, cs.Line, cs.FuncName, matchStr)
 				}
 			}
 			if reposWithSites == 0 {

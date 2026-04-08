@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "0.0.1"
+var version = "0.1.0"
 
 var (
 	cfgPath  string
@@ -19,6 +19,7 @@ var (
 	branch   string
 	packages bool
 	funcName string
+	check    bool
 
 	rootCmd = &cobra.Command{
 		Use:     "depscanner",
