@@ -1,0 +1,36 @@
+# depscanner configuration
+# Copy to ~/.depscanner.yaml and fill in your values.
+#
+# Environment variables are expanded inline — use ${VAR_NAME} syntax.
+# Example: token: "${GITEA_TOKEN}"
+
+gitea:
+  url: "https://gitea.example.com"
+  token: "${YOUR_GITEA_TOKEN}" # Token with read access to organization and repositories
+  org: "my-org"
+
+# Module path of the shared library to scan for.
+target_module: "gitea.example.com/my-org/shared-lib"
+
+# Local directory where repos are cloned/cached.
+cache_dir: "~/.depscanner/repos"
+
+# Branch to clone/track (default: main).
+# default_branch: "main"
+
+# Optional: scan only these repos (empty = all repos in org).
+# include_repos:
+#   - service-a
+#   - service-b
+
+# Branch tracking: repo branch -> target module branch.
+# Used with --branch to detect staleness against the correct shared-lib branch.
+# Default: dev->dev, staging->staging, main->main
+# branch_tracking:
+#   dev: dev
+#   staging: staging
+#   main: main
+
+# Skip repos that are definitely not relevant Go services.
+exclude_repos:
+  - docs
