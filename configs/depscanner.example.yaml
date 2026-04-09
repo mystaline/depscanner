@@ -32,5 +32,8 @@ cache_dir: "~/.depscanner/repos"
 #   main: main
 
 # Skip repos that are definitely not relevant Go services.
+# Supports glob patterns: *, ?, [...]
 exclude_repos:
   - docs
+  # - "*-temp"       # exclude all repos ending in -temp
+  # - "legacy-*"   # exclude all repos starting with legacy-

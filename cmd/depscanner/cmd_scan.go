@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	"github.com/mystaline/depscanner/internal/analysis"
@@ -125,32 +128,12 @@ func runScan(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Sync repos.
-	if !noFetch {
-		fmt.Println("Syncing repositories...")
-		if branch != "" {
-			for _, r := range repos {
-				_, syncErr := mgr.SyncBranch(r.Name, r.CloneURL, branch)
-				if syncErr != nil {
-					// Error already printed inline by SyncBranch (ok/FAIL/skip).
-					_ = syncErr
-				}
-			}
-		} else {
-			if err := mgr.SyncRepos(repos, noFetch); err != nil {
-				return fmt.Errorf("sync repos: %w", err)
-			}
-		}
-		fmt.Println()
-	}
-
 	// If --check is active, parse the target module's signature.
 	var targetSig *analysis.FuncSignature
 	if funcName != "" && check {
 		targetOwner, targetRepo := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
 		if targetOwner != "" {
 			targetPath := mgr.GetRepoPath(targetRepo)
-			// Ensure it exists locally
 			if _, statErr := os.Stat(targetPath); statErr != nil {
 				fmt.Printf("Syncing target module for signature check...\n")
 				_, syncErr := mgr.SyncBranch(targetRepo, fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo), targetBranch)
@@ -175,10 +158,16 @@ func runScan(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	var results []repoScanResult
-	goModCount := 0
-	targetCount := 0
-	for _, r := range repos {
+	// Pipeline: sync repos concurrently and process each one as soon as it's ready.
+	// Results are buffered and sorted at the end for deterministic output.
+	var (
+		mu          sync.Mutex
+		results     []repoScanResult
+		goModCount  int
+		targetCount int
+	)
+
+	processFn := func(r gitea.Repository, synced bool) {
 		repoPath := mgr.GetRepoPath(r.Name)
 		goModPath := filepath.Join(repoPath, "go.mod")
 		_, statErr := os.Stat(goModPath)
@@ -187,14 +176,12 @@ func runScan(_ *cobra.Command, _ []string) error {
 		var usesTarget bool
 		var targetVersion, commitHash, status, statusDetail string
 		if hasGoMod {
-			goModCount++
 			info, parseErr := analysis.ParseGoMod(goModPath, cfg.TargetModule)
 			if parseErr != nil {
 				fmt.Fprintf(os.Stderr, "  warn: parse go.mod for %s: %v\n", r.Name, parseErr)
 			} else if info.Found {
 				usesTarget = true
 				targetVersion = info.Version
-				targetCount++
 
 				// Staleness detection when --branch is active.
 				if branch != "" && latestTargetHash != "" {
@@ -234,7 +221,7 @@ func runScan(_ *cobra.Command, _ []string) error {
 			}
 		}
 
-		results = append(results, repoScanResult{
+		result := repoScanResult{
 			Name:          r.Name,
 			Branch:        branch,
 			HasGoMod:      hasGoMod,
@@ -247,8 +234,29 @@ func runScan(_ *cobra.Command, _ []string) error {
 			Status:        status,
 			StatusDetail:  statusDetail,
 			CloneURL:      r.CloneURL,
-		})
+		}
+
+		mu.Lock()
+		results = append(results, result)
+		if hasGoMod {
+			goModCount++
+		}
+		if usesTarget {
+			targetCount++
+		}
+		mu.Unlock()
 	}
+
+	fmt.Println("Syncing and scanning repositories...")
+	if branch != "" {
+		mgr.PipelineSyncBranchAndProcess(repos, branch, noFetch, 4, processFn)
+	} else {
+		mgr.PipelineSyncAndProcess(repos, noFetch, 4, processFn)
+	}
+	fmt.Println()
+
+	// Sort results by name for deterministic output.
+	sortResults(results)
 
 	if format == "json" {
 		return json.NewEncoder(os.Stdout).Encode(scanOutput{
@@ -421,28 +429,39 @@ func shortenHash(hash string) string {
 }
 
 // filterRepos applies include/exclude lists from config.
-// include is applied first (allowlist); exclude then removes specific repos.
+// Both include and exclude support glob patterns (*, ?, [...]) via path.Match.
+// include is applied first (allowlist); exclude then removes matched repos.
 func filterRepos(repos []gitea.Repository, include, exclude []string) []gitea.Repository {
-	excludeSet := make(map[string]struct{}, len(exclude))
-	for _, e := range exclude {
-		excludeSet[e] = struct{}{}
-	}
-	includeSet := make(map[string]struct{}, len(include))
-	for _, i := range include {
-		includeSet[i] = struct{}{}
-	}
-
 	var filtered []gitea.Repository
 	for _, r := range repos {
-		if _, excluded := excludeSet[r.Name]; excluded {
+		if matchesAny(r.Name, exclude) {
 			continue
 		}
-		if len(includeSet) > 0 {
-			if _, included := includeSet[r.Name]; !included {
-				continue
-			}
+		if len(include) > 0 && !matchesAny(r.Name, include) {
+			continue
 		}
 		filtered = append(filtered, r)
 	}
 	return filtered
+}
+
+// matchesAny checks if name matches any pattern in the list.
+// Supports exact match and glob patterns (*, ?, [...]).
+func matchesAny(name string, patterns []string) bool {
+	for _, p := range patterns {
+		if p == name {
+			return true
+		}
+		if matched, _ := path.Match(p, name); matched {
+			return true
+		}
+	}
+	return false
+}
+
+// sortResults sorts scan results by name for deterministic output.
+func sortResults(results []repoScanResult) {
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Name < results[j].Name
+	})
 }
