@@ -140,6 +140,34 @@ func (m *Manager) GetRepoPath(name string) string {
 	return filepath.Join(m.cacheDir, name)
 }
 
+// CheckoutCommit checks out a specific commit or ref in the cached repo.
+// It fetches the ref first (in case the shallow clone doesn't have it),
+// then does a detached HEAD checkout.
+func (m *Manager) CheckoutCommit(repoName, ref string) error {
+	dest := m.GetRepoPath(repoName)
+	if _, err := os.Stat(filepath.Join(dest, ".git")); os.IsNotExist(err) {
+		return fmt.Errorf("repo %s not cloned yet", repoName)
+	}
+
+	// Attempt to fetch the ref (branch name or commit hash).
+	// For branch names this updates FETCH_HEAD; for commits it may fail
+	// if the shallow clone doesn't have it, which is fine — we'll try checkout anyway.
+	fetch := exec.Command("git", "-C", dest, "fetch", "--quiet", "origin", ref)
+	_ = fetch.Run() // best-effort
+
+	// Try checkout — works for branches, tags, and commit hashes.
+	checkout := exec.Command("git", "-C", dest, "checkout", "--quiet", "--detach", ref)
+	if out, err := checkout.CombinedOutput(); err != nil {
+		// If ref is a branch name, try FETCH_HEAD instead.
+		checkout2 := exec.Command("git", "-C", dest, "checkout", "--quiet", "--detach", "FETCH_HEAD")
+		if out2, err2 := checkout2.CombinedOutput(); err2 != nil {
+			return fmt.Errorf("checkout %s: %s / %s", ref, firstLine(out), firstLine(out2))
+		}
+	}
+
+	return nil
+}
+
 // isBranchNotFound checks if git output indicates a missing remote ref.
 func isBranchNotFound(out []byte) bool {
 	s := strings.ToLower(string(out))
