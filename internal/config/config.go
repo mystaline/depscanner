@@ -118,3 +118,24 @@ func expandHome(path string) (string, error) {
 	}
 	return path, nil
 }
+// GetBranchForRepo determines the correct branch to sync for a given repository
+// based on the global branch flag, branch tracking configuration, and defaults.
+func (c *Config) GetBranchForRepo(repoName string, branchFlag string) string {
+	if branchFlag == "" {
+		return c.DefaultBranch
+	}
+
+	// 1. Check if the flag value matches a global tracking alias (e.g. --branch dev)
+	if targetBranch, ok := c.BranchTracking[branchFlag]; ok {
+		return targetBranch
+	}
+
+	// 2. Check if there's a repo-specific tracking rule (e.g. "repo-name:dev": "development")
+	repoKey := repoName + ":" + branchFlag
+	if targetBranch, ok := c.BranchTracking[repoKey]; ok {
+		return targetBranch
+	}
+
+	// 3. Fallback to literal branch name
+	return branchFlag
+}

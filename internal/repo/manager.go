@@ -47,12 +47,10 @@ func (m *Manager) syncRepo(r gitea.Repository, noFetch bool) error {
 	dest := m.GetRepoPath(r.Name)
 
 	// Clone if the repo doesn't exist locally yet.
-	// Use bare-ish clone without --single-branch so all branches are fetchable.
 	if _, err := os.Stat(filepath.Join(dest, ".git")); os.IsNotExist(err) {
-		fmt.Printf("  cloning  %s\n", r.Name)
-		cmd := exec.Command("git", "clone", "--depth=1", r.CloneURL, dest)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd := exec.Command("git", "clone", "--depth=1", "--quiet", r.CloneURL, dest)
+		cmd.Stdout = nil
+		cmd.Stderr = nil
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("git clone: %w", err)
 		}
@@ -68,17 +66,16 @@ func (m *Manager) syncRepo(r gitea.Repository, noFetch bool) error {
 		branch = "main"
 	}
 
-	fmt.Printf("  fetching %s\n", r.Name)
-	fetch := exec.Command("git", "-C", dest, "fetch", "--depth=1", "origin", branch)
-	fetch.Stdout = os.Stdout
-	fetch.Stderr = os.Stderr
+	fetch := exec.Command("git", "-C", dest, "fetch", "--depth=1", "--quiet", "origin", branch)
+	fetch.Stdout = nil
+	fetch.Stderr = nil
 	if err := fetch.Run(); err != nil {
 		return fmt.Errorf("git fetch: %w", err)
 	}
 
-	reset := exec.Command("git", "-C", dest, "reset", "--hard", "origin/"+branch)
-	reset.Stdout = os.Stdout
-	reset.Stderr = os.Stderr
+	reset := exec.Command("git", "-C", dest, "reset", "--hard", "--quiet", "origin/"+branch)
+	reset.Stdout = nil
+	reset.Stderr = nil
 	if err := reset.Run(); err != nil {
 		return fmt.Errorf("git reset: %w", err)
 	}
@@ -96,42 +93,31 @@ func (m *Manager) SyncBranch(repoName, cloneURL, branch string) (bool, error) {
 
 	// Clone if the repo doesn't exist locally yet.
 	if _, err := os.Stat(filepath.Join(dest, ".git")); os.IsNotExist(err) {
-		fmt.Printf("  cloning  %s@%s...", repoName, branch)
 		cmd := exec.Command("git", "clone", "--depth=1", "--quiet", "--branch", branch, "--", cloneURL, dest)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			if isBranchNotFound(out) {
-				fmt.Printf(" skip (no %s branch)\n", branch)
-				return false, nil
-			}
-			fmt.Printf(" FAIL\n")
-			return false, fmt.Errorf("git clone %s@%s: %s", repoName, branch, firstLine(out))
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		if err := cmd.Run(); err != nil {
+			return false, fmt.Errorf("git clone %s@%s failed", repoName, branch)
 		}
-		fmt.Printf(" ok\n")
 		return true, nil
 	}
 
-	// Fetch the specific branch. With --depth=1, this updates FETCH_HEAD
-	// but does not create a remote tracking ref (origin/<branch>).
-	fmt.Printf("  syncing  %s@%s...", repoName, branch)
+	// Fetch the specific branch.
 	fetch := exec.Command("git", "-C", dest, "fetch", "--depth=1", "--quiet", "origin", "--", branch)
-	if out, err := fetch.CombinedOutput(); err != nil {
-		if isBranchNotFound(out) {
-			fmt.Printf(" skip (no %s branch)\n", branch)
-			return false, nil
-		}
-		fmt.Printf(" FAIL\n")
-		return false, fmt.Errorf("git fetch %s@%s: %s", repoName, branch, firstLine(out))
+	fetch.Stdout = nil
+	fetch.Stderr = nil
+	if err := fetch.Run(); err != nil {
+		return false, nil
 	}
 
-	// Checkout using FETCH_HEAD (not origin/<branch>) since shallow fetch
-	// doesn't create remote tracking refs.
+	// Checkout using FETCH_HEAD
 	checkout := exec.Command("git", "-C", dest, "checkout", "--quiet", "-B", branch, "FETCH_HEAD")
-	if out, err := checkout.CombinedOutput(); err != nil {
-		fmt.Printf(" FAIL\n")
-		return false, fmt.Errorf("checkout %s: %s", branch, firstLine(out))
+	checkout.Stdout = nil
+	checkout.Stderr = nil
+	if err := checkout.Run(); err != nil {
+		return false, fmt.Errorf("checkout %s failed", branch)
 	}
 
-	fmt.Printf(" ok\n")
 	return true, nil
 }
 
@@ -149,20 +135,22 @@ func (m *Manager) CheckoutCommit(repoName, ref string) error {
 		return fmt.Errorf("repo %s not cloned yet", repoName)
 	}
 
-	// Attempt to fetch the ref (branch name or commit hash).
-	// For branch names this updates FETCH_HEAD; for commits it may fail
-	// if the shallow clone doesn't have it, which is fine — we'll try checkout anyway.
+	// Attempt to fetch the ref.
 	fetch := exec.Command("git", "-C", dest, "fetch", "--quiet", "origin", ref)
+	fetch.Stdout = nil
+	fetch.Stderr = nil
 	_ = fetch.Run() // best-effort
 
 	// Try checkout — works for branches, tags, and commit hashes.
 	checkout := exec.Command("git", "-C", dest, "checkout", "--quiet", "--detach", ref)
-	if out, err := checkout.CombinedOutput(); err != nil {
+	checkout.Stdout = nil
+	checkout.Stderr = nil
+	if err := checkout.Run(); err != nil {
 		// If ref is a branch name, try FETCH_HEAD instead.
 		checkout2 := exec.Command("git", "-C", dest, "checkout", "--quiet", "--detach", "FETCH_HEAD")
-		if out2, err2 := checkout2.CombinedOutput(); err2 != nil {
-			return fmt.Errorf("checkout %s: %s / %s", ref, firstLine(out), firstLine(out2))
-		}
+		checkout2.Stdout = nil
+		checkout2.Stderr = nil
+		_ = checkout2.Run()
 	}
 
 	return nil

@@ -15,30 +15,23 @@ import (
 )
 
 var (
-	diffFrom     string
-	diffTo       string
 	breakingOnly bool
 )
 
 func newDiffCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "diff",
-		Short: "Compare target module API between two commits/branches and detect breaking changes",
-		Long: `Builds a symbol index of the target module at two different refs (commits, branches, or tags)
-and reports all changes: added, removed, or modified symbols.
-
-Symbols tracked: functions, methods, structs, interfaces, constants, variables, and type aliases.`,
-		RunE: runDiff,
+		Use:   "diff <from> <to>",
+		Short: "Detect structural and behavioral changes between two commits of the target module",
+		Args:  cobra.ExactArgs(2),
+		RunE:  runDiff,
 	}
-	cmd.Flags().StringVar(&diffFrom, "from", "", "starting ref (commit hash, branch, or tag)")
-	cmd.Flags().StringVar(&diffTo, "to", "", "ending ref (commit hash, branch, or tag)")
 	cmd.Flags().BoolVar(&breakingOnly, "breaking-only", false, "show only breaking changes")
-	_ = cmd.MarkFlagRequired("from")
-	_ = cmd.MarkFlagRequired("to")
 	return cmd
 }
 
-func runDiff(_ *cobra.Command, _ []string) error {
+func runDiff(_ *cobra.Command, args []string) error {
+	from, to := args[0], args[1]
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -50,16 +43,13 @@ func runDiff(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("config: %w", err)
 	}
 
-	targetOwner, targetRepo := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
-	if targetOwner == "" {
-		return fmt.Errorf("target_module %q does not look like a full module path (expected host/owner/repo)", cfg.TargetModule)
-	}
-
+	_, targetRepo := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
 	mgr := repo.NewManager(cfg.CacheDir, cfg.Gitea.Org)
 	repoPath := mgr.GetRepoPath(targetRepo)
 
 	// Ensure the target repo exists locally.
 	if _, statErr := os.Stat(repoPath); statErr != nil {
+		targetOwner, _ := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
 		fmt.Printf("Cloning target module %s...\n", cfg.TargetModule)
 		cloneURL := fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo)
 		repos := []gitea.Repository{{Name: targetRepo, CloneURL: cloneURL}}
@@ -68,36 +58,34 @@ func runDiff(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Unshallow the repo to access full history for commit checkout.
+	// Unshallow to access full history.
 	fmt.Printf("Fetching full history for %s...\n", targetRepo)
 	if err := unshallowRepo(repoPath); err != nil {
 		fmt.Fprintf(os.Stderr, "  warn: unshallow failed (may work with branch refs): %v\n", err)
 	}
 
-	// Phase A: checkout --from ref, build symbol index.
-	fmt.Printf("Building symbol index at %s...\n", diffFrom)
-	if err := mgr.CheckoutCommit(targetRepo, diffFrom); err != nil {
-		return fmt.Errorf("checkout --from %s: %w", diffFrom, err)
+	// Phase A
+	fmt.Printf("Building symbol index at %s...\n", from)
+	if err := mgr.CheckoutCommit(targetRepo, from); err != nil {
+		return fmt.Errorf("checkout %s: %w", from, err)
 	}
 	oldIndex, err := analysis.BuildSymbolIndex(repoPath)
 	if err != nil {
-		return fmt.Errorf("build index at %s: %w", diffFrom, err)
+		return fmt.Errorf("build index at %s: %w", from, err)
 	}
 
-	// Phase B: checkout --to ref, build symbol index.
-	fmt.Printf("Building symbol index at %s...\n", diffTo)
-	if err := mgr.CheckoutCommit(targetRepo, diffTo); err != nil {
-		return fmt.Errorf("checkout --to %s: %w", diffTo, err)
+	// Phase B
+	fmt.Printf("Building symbol index at %s...\n", to)
+	if err := mgr.CheckoutCommit(targetRepo, to); err != nil {
+		return fmt.Errorf("checkout %s: %w", to, err)
 	}
 	newIndex, err := analysis.BuildSymbolIndex(repoPath)
 	if err != nil {
-		return fmt.Errorf("build index at %s: %w", diffTo, err)
+		return fmt.Errorf("build index at %s: %w", to, err)
 	}
 
-	// Diff.
 	changes := analysis.DiffSymbols(oldIndex, newIndex)
 
-	// Filter if --breaking-only.
 	if breakingOnly {
 		var filtered []analysis.SymbolChange
 		for _, c := range changes {
@@ -108,11 +96,10 @@ func runDiff(_ *cobra.Command, _ []string) error {
 		changes = filtered
 	}
 
-	// Output.
 	if format == "json" {
 		return json.NewEncoder(os.Stdout).Encode(diffOutput{
-			From:         diffFrom,
-			To:           diffTo,
+			From:         from,
+			To:           to,
 			TargetModule: cfg.TargetModule,
 			Changes:      changes,
 			Total:        len(changes),
@@ -121,7 +108,7 @@ func runDiff(_ *cobra.Command, _ []string) error {
 		})
 	}
 
-	return printDiffTable(changes)
+	return printDiffTable(from, to, changes)
 }
 
 type diffOutput struct {
@@ -134,13 +121,13 @@ type diffOutput struct {
 	Additive     int                     `json:"additive"`
 }
 
-func printDiffTable(changes []analysis.SymbolChange) error {
+func printDiffTable(from, to string, changes []analysis.SymbolChange) error {
 	if len(changes) == 0 {
-		fmt.Printf("\nNo API changes detected between %s and %s.\n", diffFrom, diffTo)
+		fmt.Printf("\nNo API changes detected between %s and %s.\n", from, to)
 		return nil
 	}
 
-	fmt.Printf("\nChanges in target module (%s → %s):\n\n", shortenHash(diffFrom), shortenHash(diffTo))
+	fmt.Printf("\nChanges in target module (%s → %s):\n\n", shortenHash(from), shortenHash(to))
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, c := range changes {
@@ -149,23 +136,36 @@ func printDiffTable(changes []analysis.SymbolChange) error {
 		if c.Breaking {
 			icon = colorRed + "✗" + colorReset
 			label = "BREAKING"
+		} else if c.Kind == analysis.ChangeLogic {
+			icon = colorYellow + "~" + colorReset
+			label = "LOGIC"
+		} else if c.Kind == analysis.ChangeAffected {
+			icon = "\033[34m" + "·" + colorReset
+			label = "IMPACTED"
 		}
 
 		detail := formatChangeDetail(c)
 		fmt.Fprintf(w, "  %s  %-20s\t%-30s\t%s\t[%s]\n",
-			icon,
-			string(c.Kind),
-			c.Symbol,
-			detail,
-			label,
-		)
+			icon, string(c.Kind), c.Symbol, detail, label)
 	}
 	w.Flush()
 
 	breaking := countBreaking(changes)
-	additive := len(changes) - breaking
-	fmt.Printf("\nSummary: %d breaking, %d additive changes\n", breaking, additive)
+	logic := countKind(changes, analysis.ChangeLogic)
+	affected := countKind(changes, analysis.ChangeAffected)
+	additive := len(changes) - breaking - logic - affected
+	fmt.Printf("\nSummary: %d breaking, %d logic, %d impacted, %d additive changes\n", breaking, logic, affected, additive)
 	return nil
+}
+
+func countKind(changes []analysis.SymbolChange, kind analysis.ChangeKind) int {
+	n := 0
+	for _, c := range changes {
+		if c.Kind == kind {
+			n++
+		}
+	}
+	return n
 }
 
 func formatChangeDetail(c analysis.SymbolChange) string {
@@ -201,11 +201,9 @@ func unshallowRepo(repoPath string) error {
 
 func firstLine(out []byte) string {
 	s := string(out)
-	if idx := len(s); idx > 0 {
-		for i, c := range s {
-			if c == '\n' {
-				return s[:i]
-			}
+	for i, c := range s {
+		if c == '\n' {
+			return s[:i]
 		}
 	}
 	return s

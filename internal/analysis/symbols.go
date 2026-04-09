@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -12,7 +13,7 @@ import (
 	"strings"
 )
 
-// SymbolKind classifies Go exported symbols.
+// SymbolKind classifies Go symbols.
 type SymbolKind string
 
 const (
@@ -38,7 +39,7 @@ type FieldInfo struct {
 	Tag  string `json:"tag,omitempty"`
 }
 
-// Symbol represents a single exported Go symbol.
+// Symbol represents a Go symbol (exported or internal).
 type Symbol struct {
 	Kind       SymbolKind  `json:"kind"`
 	Name       string      `json:"name"`
@@ -51,14 +52,19 @@ type Symbol struct {
 	Methods    []string    `json:"methods,omitempty"`
 	Value      string      `json:"value,omitempty"`
 	TypeExpr   string      `json:"type_expr,omitempty"`
+	IsExported bool        `json:"is_exported"`
+
+	// Behavioral Audit Fields (Hybrid Approach)
+	BodyHash    string   `json:"body_hash,omitempty"`    // SHA256 of the symbol's implementation
+	UsedSymbols []string `json:"used_symbols,omitempty"` // Names of other symbols referenced in body
 }
 
 // SymbolIndex maps qualified symbol names to their definitions.
-// Key format: "subpkg.Name" or "subpkg.Receiver.Method"
 type SymbolIndex map[string]Symbol
 
 // BuildSymbolIndex parses all Go files in moduleDir and extracts
-// every exported symbol into an index.
+// symbols into an index. It collects BOTH exported and internal symbols
+// to enable behavioral impact analysis.
 func BuildSymbolIndex(moduleDir string) (SymbolIndex, error) {
 	index := make(SymbolIndex)
 	fset := token.NewFileSet()
@@ -69,7 +75,6 @@ func BuildSymbolIndex(moduleDir string) (SymbolIndex, error) {
 			return nil // skip unparseable files
 		}
 
-		// Derive sub-package name relative to module root.
 		relPath, _ := filepath.Rel(moduleDir, path)
 		pkg := derivePackage(relPath)
 
@@ -102,30 +107,30 @@ func (idx SymbolIndex) SortedKeys() []string {
 
 // extractFunc handles function and method declarations.
 func extractFunc(fset *token.FileSet, idx SymbolIndex, pkg string, fn *ast.FuncDecl) {
-	if !fn.Name.IsExported() {
-		return
-	}
-
 	sym := Symbol{
-		Kind:    KindFunc,
-		Name:    fn.Name.Name,
-		Package: pkg,
+		Kind:       KindFunc,
+		Name:       fn.Name.Name,
+		Package:    pkg,
+		IsExported: fn.Name.IsExported(),
 	}
 
-	// Method receiver
 	if fn.Recv != nil && len(fn.Recv.List) > 0 {
 		sym.Kind = KindMethod
 		sym.Receiver = typeExprToString(fset, fn.Recv.List[0].Type)
+		// Receiver type (e.g. *T) doesn't decide export status, the method name does.
 	}
 
-	// Parameters
 	if fn.Type.Params != nil {
 		sym.Params, sym.IsVariadic = extractFieldList(fset, fn.Type.Params)
 	}
-
-	// Returns
 	if fn.Type.Results != nil {
 		sym.Returns, _ = extractFieldList(fset, fn.Type.Results)
+	}
+
+	// Behavioral Analysis: Hash the body and collect referenced symbols.
+	if fn.Body != nil {
+		sym.BodyHash = hashNode(fset, fn.Body)
+		sym.UsedSymbols = collectUsedSymbols(fn.Body)
 	}
 
 	key := symbolKey(pkg, sym.Receiver, fn.Name.Name)
@@ -150,16 +155,15 @@ func extractGenDecl(fset *token.FileSet, idx SymbolIndex, pkg string, gd *ast.Ge
 
 // extractTypeSpec handles struct, interface, and type alias/definition declarations.
 func extractTypeSpec(fset *token.FileSet, idx SymbolIndex, pkg string, ts *ast.TypeSpec) {
-	if !ts.Name.IsExported() {
-		return
-	}
+	exported := ts.Name.IsExported()
 
 	switch t := ts.Type.(type) {
 	case *ast.StructType:
 		sym := Symbol{
-			Kind:    KindStruct,
-			Name:    ts.Name.Name,
-			Package: pkg,
+			Kind:       KindStruct,
+			Name:       ts.Name.Name,
+			Package:    pkg,
+			IsExported: exported,
 		}
 		if t.Fields != nil {
 			for _, field := range t.Fields.List {
@@ -170,7 +174,6 @@ func extractTypeSpec(fset *token.FileSet, idx SymbolIndex, pkg string, ts *ast.T
 				}
 
 				if len(field.Names) == 0 {
-					// Embedded field
 					sym.Fields = append(sym.Fields, FieldInfo{
 						Name: fieldType,
 						Type: fieldType,
@@ -178,6 +181,8 @@ func extractTypeSpec(fset *token.FileSet, idx SymbolIndex, pkg string, ts *ast.T
 					})
 				} else {
 					for _, name := range field.Names {
+						// We only record exported fields as part of the public API,
+						// but the struct itself could be internal.
 						if name.IsExported() {
 							sym.Fields = append(sym.Fields, FieldInfo{
 								Name: name.Name,
@@ -193,9 +198,10 @@ func extractTypeSpec(fset *token.FileSet, idx SymbolIndex, pkg string, ts *ast.T
 
 	case *ast.InterfaceType:
 		sym := Symbol{
-			Kind:    KindInterface,
-			Name:    ts.Name.Name,
-			Package: pkg,
+			Kind:       KindInterface,
+			Name:       ts.Name.Name,
+			Package:    pkg,
+			IsExported: exported,
 		}
 		if t.Methods != nil {
 			for _, m := range t.Methods.List {
@@ -203,7 +209,6 @@ func extractTypeSpec(fset *token.FileSet, idx SymbolIndex, pkg string, ts *ast.T
 				for _, name := range m.Names {
 					sym.Methods = append(sym.Methods, name.Name+sig)
 				}
-				// Embedded interface
 				if len(m.Names) == 0 {
 					sym.Methods = append(sym.Methods, sig)
 				}
@@ -213,12 +218,12 @@ func extractTypeSpec(fset *token.FileSet, idx SymbolIndex, pkg string, ts *ast.T
 		idx[symbolKey(pkg, "", ts.Name.Name)] = sym
 
 	default:
-		// Type alias or type definition
 		sym := Symbol{
-			Kind:     KindType,
-			Name:     ts.Name.Name,
-			Package:  pkg,
-			TypeExpr: typeExprToString(fset, ts.Type),
+			Kind:       KindType,
+			Name:       ts.Name.Name,
+			Package:    pkg,
+			TypeExpr:   typeExprToString(fset, ts.Type),
+			IsExported: exported,
 		}
 		idx[symbolKey(pkg, "", ts.Name.Name)] = sym
 	}
@@ -227,45 +232,81 @@ func extractTypeSpec(fset *token.FileSet, idx SymbolIndex, pkg string, ts *ast.T
 // extractValueSpec handles const and var declarations.
 func extractValueSpec(fset *token.FileSet, idx SymbolIndex, pkg string, kind SymbolKind, vs *ast.ValueSpec) {
 	for i, name := range vs.Names {
-		if !name.IsExported() {
-			continue
-		}
-
 		sym := Symbol{
-			Kind:    kind,
-			Name:    name.Name,
-			Package: pkg,
+			Kind:       kind,
+			Name:       name.Name,
+			Package:    pkg,
+			IsExported: name.IsExported(),
 		}
-
 		if vs.Type != nil {
 			sym.TypeExpr = typeExprToString(fset, vs.Type)
 		}
-
 		if i < len(vs.Values) {
 			sym.Value = exprToString(fset, vs.Values[i])
+			// Track if constant value depends on other symbols (simplified)
+			sym.UsedSymbols = collectUsedSymbols(vs.Values[i])
 		}
-
 		idx[symbolKey(pkg, "", name.Name)] = sym
 	}
+}
+
+// hashNode returns a SHA256 hash of the canonical string representation of an AST node.
+func hashNode(fset *token.FileSet, node ast.Node) string {
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, fset, node); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(buf.Bytes()))
+}
+
+// collectUsedSymbols scans a node for all identifiers (potential symbol names).
+func collectUsedSymbols(node ast.Node) []string {
+	ids := make(map[string]struct{})
+	ast.Inspect(node, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.Ident:
+			// Basic name call (internal to package)
+			if x.Name != "" && !isBuiltin(x.Name) {
+				ids[x.Name] = struct{}{}
+			}
+		case *ast.SelectorExpr:
+			// pkg.Func() call
+			if x.Sel != nil && x.Sel.Name != "" {
+				// We still collect the name. The propagation logic will try to resolve it.
+				ids[x.Sel.Name] = struct{}{}
+			}
+		}
+		return true
+	})
+
+	var result []string
+	for id := range ids {
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func isBuiltin(name string) bool {
+	switch name {
+	case "nil", "true", "false", "err", "len", "cap", "append", "make", "new", "panic", "recover", "print", "println":
+		return true
+	}
+	return false
 }
 
 // extractFieldList converts an ast.FieldList into []ParamInfo and detects variadic.
 func extractFieldList(fset *token.FileSet, fl *ast.FieldList) ([]ParamInfo, bool) {
 	var params []ParamInfo
 	isVariadic := false
-
 	for i, field := range fl.List {
 		typStr := typeExprToString(fset, field.Type)
-
-		// Variadic detection on the last parameter
 		if i == len(fl.List)-1 {
 			if _, ok := field.Type.(*ast.Ellipsis); ok {
 				isVariadic = true
 			}
 		}
-
 		if len(field.Names) == 0 {
-			// Unnamed parameter (e.g. func Foo(int, string))
 			params = append(params, ParamInfo{Type: typStr})
 		} else {
 			for _, name := range field.Names {
@@ -276,7 +317,6 @@ func extractFieldList(fset *token.FileSet, fl *ast.FieldList) ([]ParamInfo, bool
 	return params, isVariadic
 }
 
-// typeExprToString uses go/printer for canonical type representation.
 func typeExprToString(fset *token.FileSet, expr ast.Expr) string {
 	var buf bytes.Buffer
 	if err := printer.Fprint(&buf, fset, expr); err != nil {
@@ -285,7 +325,6 @@ func typeExprToString(fset *token.FileSet, expr ast.Expr) string {
 	return buf.String()
 }
 
-// exprToString renders any expression to string using go/printer.
 func exprToString(fset *token.FileSet, expr ast.Expr) string {
 	var buf bytes.Buffer
 	if err := printer.Fprint(&buf, fset, expr); err != nil {
@@ -294,10 +333,8 @@ func exprToString(fset *token.FileSet, expr ast.Expr) string {
 	return buf.String()
 }
 
-// symbolKey builds the unique key for a symbol in the index.
 func symbolKey(pkg, receiver, name string) string {
 	if receiver != "" {
-		// Strip pointer prefix for consistent keying
 		recv := strings.TrimPrefix(receiver, "*")
 		if pkg != "" {
 			return pkg + "." + recv + "." + name
@@ -310,7 +347,6 @@ func symbolKey(pkg, receiver, name string) string {
 	return name
 }
 
-// derivePackage extracts the sub-package directory from a relative file path.
 func derivePackage(relPath string) string {
 	dir := filepath.Dir(relPath)
 	dir = filepath.ToSlash(dir)

@@ -74,7 +74,7 @@ func newScanCmd() *cobra.Command {
 		Short: "List all org repos and detect shared library usage and staleness",
 		RunE:  runScan,
 	}
-	cmd.Flags().StringVar(&branch, "branch", "", "scan a specific branch (enables staleness detection)")
+
 	cmd.Flags().BoolVar(&packages, "packages", false, "show which sub-packages of the target module are imported")
 	cmd.Flags().StringVar(&funcName, "func", "", "search for call sites of a specific function (e.g. \"Must\" or \"helper.Must\")")
 	cmd.Flags().BoolVar(&check, "check", false, "check call-site signatures against target module (requires --func)")
@@ -173,6 +173,9 @@ func runScan(_ *cobra.Command, _ []string) error {
 		_, statErr := os.Stat(goModPath)
 		hasGoMod := statErr == nil
 
+		// Use the correct branch for display/logic
+		targetBranchForRepo := cfg.GetBranchForRepo(r.Name, branch)
+
 		var usesTarget bool
 		var targetVersion, commitHash, status, statusDetail string
 		if hasGoMod {
@@ -183,7 +186,7 @@ func runScan(_ *cobra.Command, _ []string) error {
 				usesTarget = true
 				targetVersion = info.Version
 
-				// Staleness detection when --branch is active.
+				// Staleness detection when branch is active.
 				if branch != "" && latestTargetHash != "" {
 					commitHash, status, statusDetail = detectStaleness(info.Version, latestTargetHash)
 				}
@@ -223,7 +226,7 @@ func runScan(_ *cobra.Command, _ []string) error {
 
 		result := repoScanResult{
 			Name:          r.Name,
-			Branch:        branch,
+			Branch:        targetBranchForRepo,
 			HasGoMod:      hasGoMod,
 			UsesTarget:    usesTarget,
 			Packages:      pkgs,
@@ -247,11 +250,24 @@ func runScan(_ *cobra.Command, _ []string) error {
 		mu.Unlock()
 	}
 
-	fmt.Println("Syncing and scanning repositories...")
-	if branch != "" {
-		mgr.PipelineSyncBranchAndProcess(repos, branch, noFetch, 4, processFn)
-	} else {
+	processFnWithBranch := func(r gitea.Repository, _ bool) {
+		// This is a dummy call to SyncBranch inside the pipeline loop, 
+		// but since we want to sync the CORRECT branch for each repo:
+		targetBranch := cfg.GetBranchForRepo(r.Name, branch)
+		ok, err := mgr.SyncBranchQuiet(r.Name, r.CloneURL, targetBranch)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  warn: sync %s@%s: %v\n", r.Name, targetBranch, err)
+			processFn(r, false)
+			return
+		}
+		processFn(r, ok)
+	}
+
+	if branch == "" {
 		mgr.PipelineSyncAndProcess(repos, noFetch, 4, processFn)
+	} else {
+		// Use generic pipeline but sync the custom branch per repo
+		mgr.PipelineSyncAndProcess(repos, noFetch, 4, processFnWithBranch)
 	}
 	fmt.Println()
 

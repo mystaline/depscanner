@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "0.2.1"
+var version = "0.3.0"
 
 var (
 	cfgPath  string
@@ -34,6 +34,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cacheDir, "cache-dir", "", "local repo cache directory (overrides config)")
 	rootCmd.PersistentFlags().StringVar(&format, "format", "table", "output format: table | json")
 	rootCmd.PersistentFlags().BoolVar(&noFetch, "no-fetch", false, "skip git fetch, use cached repos only")
+	rootCmd.PersistentFlags().StringVar(&branch, "branch", "", "scan repositories on a specific branch")
 
 	rootCmd.AddCommand(newScanCmd())
 	rootCmd.AddCommand(newDiffCmd())

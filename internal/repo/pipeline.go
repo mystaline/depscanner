@@ -91,7 +91,7 @@ func (m *Manager) PipelineSyncBranchAndProcess(repos []gitea.Repository, branch 
 
 			synced := true
 			if !noFetch {
-				ok, err := m.syncBranchQuiet(repo.Name, repo.CloneURL, branch)
+				ok, err := m.SyncBranchQuiet(repo.Name, repo.CloneURL, branch)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "  warn: sync %s@%s: %v\n", repo.Name, branch, err)
 					synced = false
@@ -126,9 +126,9 @@ func clearProgress() {
 	fmt.Fprintf(os.Stderr, "\r                                                    \r")
 }
 
-// syncBranchQuiet is a non-printing version of SyncBranch for use
+// SyncBranchQuiet is a non-printing version of SyncBranch for use
 // in concurrent pipelines where interleaved output would be messy.
-func (m *Manager) syncBranchQuiet(repoName, cloneURL, branch string) (bool, error) {
+func (m *Manager) SyncBranchQuiet(repoName, cloneURL, branch string) (bool, error) {
 	if !isValidBranchName(branch) {
 		return false, fmt.Errorf("invalid branch name: %s", branch)
 	}
@@ -138,28 +138,28 @@ func (m *Manager) syncBranchQuiet(repoName, cloneURL, branch string) (bool, erro
 	// Clone if not yet cached.
 	if _, err := os.Stat(filepath.Join(dest, ".git")); os.IsNotExist(err) {
 		cmd := exec.Command("git", "clone", "--depth=1", "--quiet", "--branch", branch, "--", cloneURL, dest)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			if isBranchNotFound(out) {
-				return false, nil
-			}
-			return false, fmt.Errorf("git clone %s@%s: %s", repoName, branch, firstLine(out))
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		if err := cmd.Run(); err != nil {
+			return false, fmt.Errorf("git clone %s@%s failed", repoName, branch)
 		}
 		return true, nil
 	}
 
 	// Fetch specific branch.
 	fetch := exec.Command("git", "-C", dest, "fetch", "--depth=1", "--quiet", "origin", "--", branch)
-	if out, err := fetch.CombinedOutput(); err != nil {
-		if isBranchNotFound(out) {
-			return false, nil
-		}
-		return false, fmt.Errorf("git fetch %s@%s: %s", repoName, branch, firstLine(out))
+	fetch.Stdout = nil
+	fetch.Stderr = nil
+	if err := fetch.Run(); err != nil {
+		return false, nil // branch not found most likely
 	}
 
 	// Checkout FETCH_HEAD.
 	checkout := exec.Command("git", "-C", dest, "checkout", "--quiet", "-B", branch, "FETCH_HEAD")
-	if out, err := checkout.CombinedOutput(); err != nil {
-		return false, fmt.Errorf("checkout %s: %s", branch, firstLine(out))
+	checkout.Stdout = nil
+	checkout.Stderr = nil
+	if err := checkout.Run(); err != nil {
+		return false, fmt.Errorf("git checkout %s failed", branch)
 	}
 
 	return true, nil
