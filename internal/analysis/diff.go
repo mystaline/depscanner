@@ -373,3 +373,10 @@ func toSet(items []string) map[string]struct{} {
 	}
 	return m
 }
+
+func symbolKey(pkg, receiver, name string) string {
+	if receiver != "" {
+		return fmt.Sprintf("%s.%s.%s", pkg, receiver, name)
+	}
+	return fmt.Sprintf("%s.%s", pkg, name)
+}
