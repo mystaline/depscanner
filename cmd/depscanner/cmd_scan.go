@@ -437,12 +437,6 @@ func statusIcon(status string) string {
 	}
 }
 
-func shortenHash(hash string) string {
-	if len(hash) > 12 {
-		return hash[:12]
-	}
-	return hash
-}
 
 // filterRepos applies include/exclude lists from config.
 // Both include and exclude support glob patterns (*, ?, [...]) via path.Match.

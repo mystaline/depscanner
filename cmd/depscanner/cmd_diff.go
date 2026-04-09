@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"text/tabwriter"
 
 	"github.com/mystaline/depscanner/internal/analysis"
@@ -60,9 +59,7 @@ func runDiff(_ *cobra.Command, args []string) error {
 
 	// Unshallow to access full history.
 	fmt.Printf("Fetching full history for %s...\n", targetRepo)
-	if err := unshallowRepo(repoPath); err != nil {
-		fmt.Fprintf(os.Stderr, "  warn: unshallow failed (may work with branch refs): %v\n", err)
-	}
+	unshallowTargetRepo(repoPath)
 
 	// Phase A
 	fmt.Printf("Building symbol index at %s...\n", from)
@@ -191,20 +188,3 @@ func countBreaking(changes []analysis.SymbolChange) int {
 	return n
 }
 
-func unshallowRepo(repoPath string) error {
-	cmd := exec.Command("git", "-C", repoPath, "fetch", "--unshallow", "--quiet")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s", firstLine(out))
-	}
-	return nil
-}
-
-func firstLine(out []byte) string {
-	s := string(out)
-	for i, c := range s {
-		if c == '\n' {
-			return s[:i]
-		}
-	}
-	return s
-}

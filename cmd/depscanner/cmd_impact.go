@@ -249,34 +249,6 @@ func findSymbolIntroCommit(repoPath, from, to, filePath string, startLine, endLi
 	return to
 }
 
-func isAncestor(repoPath, ancestor, descendant string) bool {
-	if ancestor == "" || descendant == "" {
-		return false
-	}
-	if strings.HasPrefix(descendant, ancestor) || strings.HasPrefix(ancestor, descendant) {
-		return true
-	}
-
-	// Double check if descendant exists, if not, try to fetch it
-	if err := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", descendant).Run(); err != nil {
-		// Not found locally, try to fetch it
-		_ = exec.Command("git", "-C", repoPath, "fetch", "origin", descendant, "--quiet").Run()
-	}
-
-	cmd := exec.Command("git", "-C", repoPath, "merge-base", "--is-ancestor", ancestor, descendant)
-	return cmd.Run() == nil
-}
-
-func unshallowTargetRepo(repoPath string) {
-	// Ensure the repo is configured to fetch all branches, not just the default one
-	// (Shallow clones are often single-branch)
-	_ = exec.Command("git", "-C", repoPath, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*").Run()
-
-	if _, err := os.Stat(filepath.Join(repoPath, ".git", "shallow")); err == nil {
-		_ = exec.Command("git", "-C", repoPath, "fetch", "--unshallow", "--quiet").Run()
-	}
-}
-
 func extractHash(version string) string {
 	parts := strings.Split(version, "-")
 	if len(parts) > 1 {
