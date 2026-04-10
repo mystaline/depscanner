@@ -14,7 +14,8 @@ type CallSite struct {
 	File     string // relative path within the repo
 	Line     int
 	Column   int
-	FuncName string // the resolved function name (e.g. "helper.Must")
+	FuncName string // the resolved function name (e.g. "github.com/org/lib/helper.Must")
+	RawName  string // the original name in code (e.g. "helper.Must")
 	ArgCount int    // number of arguments in the call
 }
 
@@ -60,12 +61,19 @@ func ScanCallSites(repoDir, targetModule, funcName string) ([]CallSite, []string
 				parts := strings.Split(importPath, "/")
 				pkgBaseName := parts[len(parts)-1]
 
-				// If user specified a package qualifier, match against the import
-				// path's base name (not the local alias). Dot imports are always
+				// If user specified a package qualifier, match against the relative
+				// part of the import path. Dot imports are always
 				// included since they merge into the caller's namespace.
 				isDot := imp.Name != nil && imp.Name.Name == "."
-				if qualPkg != "" && !isDot && pkgBaseName != qualPkg {
-					continue
+				if qualPkg != "" && !isDot {
+					relPath := ""
+					if importPath != targetModule {
+						relPath = strings.TrimPrefix(importPath, targetModule+"/")
+					}
+					// Method support: qualPkg might be "pkg.Receiver", so we check prefix
+					if relPath != qualPkg && pkgBaseName != qualPkg && !strings.HasPrefix(qualPkg, relPath+".") {
+						continue
+					}
 				}
 
 				// Determine the local name used in code (explicit alias or last path segment).
@@ -102,7 +110,6 @@ func ScanCallSites(repoDir, targetModule, funcName string) ([]CallSite, []string
 	for _, c := range candidates {
 		f, parseErr := parser.ParseFile(fset2, c.path, nil, parser.ParseComments)
 		if parseErr != nil {
-			// File passed ImportsOnly parse but failed full parse — likely syntax error.
 			parseWarnings = append(parseWarnings, fmt.Sprintf("%s: %v", c.path, parseErr))
 			continue
 		}
@@ -113,7 +120,7 @@ func ScanCallSites(repoDir, targetModule, funcName string) ([]CallSite, []string
 				return true
 			}
 
-			resolvedName := matchCallExpr(call, c.aliasMap, plainFunc)
+			resolvedName, rawName := matchCallExpr(call, c.aliasMap, plainFunc)
 			if resolvedName == "" {
 				return true
 			}
@@ -129,6 +136,7 @@ func ScanCallSites(repoDir, targetModule, funcName string) ([]CallSite, []string
 				Line:     pos.Line,
 				Column:   pos.Column,
 				FuncName: resolvedName,
+				RawName:  rawName,
 				ArgCount: len(call.Args),
 			})
 
@@ -141,37 +149,42 @@ func ScanCallSites(repoDir, targetModule, funcName string) ([]CallSite, []string
 
 // matchCallExpr checks if a CallExpr matches the target function via the alias map.
 // Returns the resolved "pkg.Func" name or "" if no match.
-func matchCallExpr(call *ast.CallExpr, aliasMap map[string]string, funcName string) string {
+func matchCallExpr(call *ast.CallExpr, aliasMap map[string]string, funcName string) (string, string) {
 	switch fn := call.Fun.(type) {
 	case *ast.SelectorExpr:
 		// pkg.Func() pattern
 		ident, ok := fn.X.(*ast.Ident)
 		if !ok {
-			return ""
+			return "", ""
 		}
 		pkgAlias := ident.Name
 		calledFunc := fn.Sel.Name
 
-		if _, isTarget := aliasMap[pkgAlias]; !isTarget {
-			return ""
+		importPath, isTarget := aliasMap[pkgAlias]
+		if isTarget {
+			if calledFunc == funcName {
+				return importPath + "." + calledFunc, pkgAlias + "." + calledFunc
+			}
 		}
-		if calledFunc != funcName {
-			return ""
+
+		if calledFunc == funcName {
+			return pkgAlias + "." + calledFunc, pkgAlias + "." + calledFunc
 		}
-		return pkgAlias + "." + calledFunc
+		return "", ""
 
 	case *ast.Ident:
 		// Direct call (dot-imported). Check if any alias is ".".
-		if _, hasDot := aliasMap["."]; !hasDot {
-			return ""
+		importPath, hasDot := aliasMap["."]
+		if !hasDot {
+			return "", ""
 		}
 		if fn.Name != funcName {
-			return ""
+			return "", ""
 		}
-		return fn.Name
+		return importPath + "." + fn.Name, fn.Name
 	}
 
-	return ""
+	return "", ""
 }
 
 // splitQualifiedName splits "helper.Must" into ("helper", "Must")

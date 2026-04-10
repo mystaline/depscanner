@@ -13,9 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	breakingOnly bool
-)
+var breakingOnly bool
 
 func newDiffCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -66,7 +64,7 @@ func runDiff(_ *cobra.Command, args []string) error {
 	if err := mgr.CheckoutCommit(targetRepo, from); err != nil {
 		return fmt.Errorf("checkout %s: %w", from, err)
 	}
-	oldIndex, err := analysis.BuildSymbolIndex(repoPath)
+	oldIndex, err := analysis.BuildSymbolIndex(repoPath, cfg.TargetModule)
 	if err != nil {
 		return fmt.Errorf("build index at %s: %w", from, err)
 	}
@@ -76,7 +74,7 @@ func runDiff(_ *cobra.Command, args []string) error {
 	if err := mgr.CheckoutCommit(targetRepo, to); err != nil {
 		return fmt.Errorf("checkout %s: %w", to, err)
 	}
-	newIndex, err := analysis.BuildSymbolIndex(repoPath)
+	newIndex, err := analysis.BuildSymbolIndex(repoPath, cfg.TargetModule)
 	if err != nil {
 		return fmt.Errorf("build index at %s: %w", to, err)
 	}
@@ -187,4 +185,3 @@ func countBreaking(changes []analysis.SymbolChange) int {
 	}
 	return n
 }
-

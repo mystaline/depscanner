@@ -1,3 +1,5 @@
+// Package analysis provides tools for analyzing Go source code, including
+// function signature extraction and call-site matching.
 package analysis
 
 import (
@@ -9,15 +11,22 @@ import (
 	"strings"
 )
 
-// FuncSignature represents the parameter signature of a Go function.
+// FuncSignature represents the parameter structure of a Go function.
+// This is used for legacy validation (argument count checks).
 type FuncSignature struct {
-	Name        string
-	ParamsCount int
-	IsVariadic  bool
+	Name        string // Full name including package
+	ParamsCount int    // Number of positional parameters
+	IsVariadic  bool   // True if the last parameter is ...args
 }
 
-// ParseSignature searches the target module directory for a function definition
-// matching funcName and returns its parameter signature.
+// ParseSignature searches the moduleDir for a function called funcName
+// and extracts its signature from the AST.
+//
+// Logic Flow:
+// 1. Traverse all Go files in the module.
+// 2. Parse each file and use ast.Inspect to find FuncDecl nodes.
+// 3. Match the function name and count the parameters (resolving identifiers).
+// 4. Return the first match found.
 func ParseSignature(moduleDir, funcName string) (*FuncSignature, error) {
 	qualPkg, plainFunc := splitQualifiedName(funcName)
 	fset := token.NewFileSet()
@@ -28,6 +37,7 @@ func ParseSignature(moduleDir, funcName string) (*FuncSignature, error) {
 			return nil
 		}
 
+		// Optimization: if we have a package qualifier, check if file is likely in that pkg.
 		if qualPkg != "" {
 			relPath, _ := filepath.Rel(moduleDir, path)
 			relPkg := filepathToPkg(relPath)
@@ -74,7 +84,6 @@ func ParseSignature(moduleDir, funcName string) (*FuncSignature, error) {
 		})
 		return nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +93,7 @@ func ParseSignature(moduleDir, funcName string) (*FuncSignature, error) {
 	return found, nil
 }
 
+// filepathToPkg converts a file path like "pkg/sub/file.go" into a package identity "pkg.sub".
 func filepathToPkg(path string) string {
 	dir := strings.ReplaceAll(path, "\\", "/")
 	idx := strings.LastIndex(dir, "/")

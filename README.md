@@ -1,8 +1,23 @@
 # depscanner
 
-CLI tool that scans all repositories in an organization to detect shared Go library usage, version staleness per branch, sub-package import mapping, function-level call-site search, API diff between commits, and per-repo breaking change impact analysis.
+![Depscanner Banner](assets/banner.png)
 
-Built for environments where multiple Go microservices depend on a single shared library and you need visibility into who uses what, how stale they are, and where specific functions are called.
+[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go)](https://go.dev)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![Stability](https://img.shields.io/badge/Stability-Stable-success?style=flat-square)](#)
+[![Test Coverage](https://img.shields.io/badge/coverage-analysis%2047%25%20%7C%20config%2086%25%20%7C%20gitea%2090%25-blue?style=flat-square)](#testing)
+
+A high-performance CLI tool designed for large-scale Go organizations to manage shared library dependencies. depscanner analyzes impact, tracks architectural debt, and validates API compatibility across hundreds of repositories.
+
+## Key Features
+
+- **Deep AST Analysis**: True function-level call-site tracking using Go's Abstract Syntax Tree. Understands package aliases and method calls (`obj.Method()`).
+- **High-Performance Pipeline**: Concurrently syncs and processes multiple repositories using a worker-pool architecture.
+- **Surgical Resolution Tracking**: Identifies if a fix has been applied by tracing symbol history through git log -L and ancestry checks.
+- **Impact Analysis**: Automatically cross-references API breaking changes with actual call sites in consumer applications.
+- **Transparent Reporting**: Displays how functions are actually called in code (e.g., `util.ProcessData`) for intuitive debugging.
+- **Gitea Native**: Full integration with Gitea organization APIs.
+- **Behavioral Audit**: Detects logic changes even when function signatures remain identical using SHA-256 body hashing.
 
 ## Install
 
@@ -138,6 +153,7 @@ depscanner diff --from 1.0.0 --to 1.1.0
 **Example Output:**
 
 ```text
+
   ✗  REMOVED           core.OldFunction               [BREAKING]
   ~  LOGIC_CHANGED     util.ProcessData               [LOGIC]
   +  ADDED             core.NewFunction               [additive]
@@ -157,14 +173,24 @@ depscanner impact --from abc123 --to main
 
 **Example Output:**
 
-```text
+````text
 ✓ RESOLVED my-cool-app (current: ...-2a019f321162)
   ✓ module/util.ProcessData — 2 call sites: (resolved in 97ce50f14a26)
 
 ⚠ ACTION REQUIRED data-processor (current: ...-568d8cd5539e)
   ~ module/util.ProcessData — 5 call sites: (needs commit 97ce50f14a26)
       internal/worker/job.go:112    util.ProcessData
-```
+
+### 8. Diagnostic Mode
+
+If no impacts are found, Depscanner provides a transparent breakdown of what was scanned:
+
+```text
+Checked 3 impactful symbols across all reservoirs:
+  ~ legacy.API.DeprecatedMethod: 0 call sites
+  ~ legacy.NewClient: 0 call sites
+  ✓ No consumers are actually affected by these changes.
+````
 
 - **RESOLVED**: Repository is using a version that already contains the fix (verified via git ancestry).
 - **ACTION REQUIRED**: Repository is still using an old version and is affected by the changes. Shows which commit contains the fix.
@@ -187,6 +213,28 @@ depscanner impact --from abc123 --to main
 - **Table** (default): Human-readable terminal output with colored status icons.
 - **JSON** (`--format json`): Machine-readable output for CI/CD pipelines and scripting.
 
+## Example Workflow
+
+**Scenario:** Planning to update `github.com/example/shared-lib` from v1.0.0 to v1.2.0 across multiple repos.
+
+```bash
+# 1. Detect which repos use shared-lib
+depscanner scan
+
+# 2. Compare API between versions
+depscanner diff --from v1.0.0 --to v1.2.0
+
+# 3. See which repos are affected and need fixes
+depscanner impact --from v1.0.0 --to v1.2.0
+
+# Output shows:
+# ✓ RESOLVED api-app (already on v1.2.0 — safe)
+# ⚠ ACTION REQUIRED worker-app (on v1.0.0 — has 3 call sites needing updates)
+# ⚠ ACTION REQUIRED batch-job (on v1.0.0 — has 1 call site needing updates)
+```
+
+This takes the guesswork out of: "Can we update this lib? Which repos need attention? What exactly will break?"
+
 ## How it Works
 
 1. **Discovery**: Fetches repository list via Gitea API.
@@ -197,6 +245,41 @@ depscanner impact --from abc123 --to main
    - Performs two-pass AST scanning for call-site detection.
    - Builds a full symbol index for structural and behavioral diffing.
    - **Surgical Resolution Tracking**: Uses `git log -L` and automated ancestry verification (with auto-unshallowing) to determine if a fix has been applied.
+
+## Testing
+
+Run the full test suite:
+
+```bash
+go test ./...
+```
+
+Run tests with verbose output:
+
+```bash
+go test ./... -v
+```
+
+Run tests with coverage report:
+
+```bash
+go test ./... -cover
+```
+
+**Current coverage:**
+
+- `internal/analysis`: 49.8% (diff, impact, version, gomod parsing)
+- `internal/config`: 86.0% (config loading, validation, env expansion)
+- `internal/gitea`: 90.7% (Gitea API client mocking)
+
+Tests include:
+
+- Version and pseudo-version parsing (semver comparison, staleness detection)
+- Go.mod parsing (single-line and block requires, comments, pseudo-versions)
+- Configuration loading (env var expansion, validation, branch tracking)
+- Gitea API client (pagination, error handling, authentication)
+- Symbol diffing (breaking changes, logic changes, interface modifications)
+- Impact analysis (call site matching, repo sorting, summary generation)
 
 ## Requirements
 

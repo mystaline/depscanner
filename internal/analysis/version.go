@@ -1,3 +1,5 @@
+// Package analysis provides utilities for Go source code analysis, including
+// semver comparison and pseudo-version parsing for dependency staleness detection.
 package analysis
 
 import (
@@ -7,12 +9,15 @@ import (
 	"time"
 )
 
-// PseudoVersion holds the parsed components of a Go pseudo-version.
-// Format: vX.Y.Z-YYYYMMDDHHMMSS-abcdef123456
+// PseudoVersion holds the parsed components of a canonical Go pseudo-version.
+//
+// Examples:
+//   - v0.0.0-20260311025516-abcdef123456
+//   - v1.1.0-dev.0.20260409024228-2a019f321162
 type PseudoVersion struct {
-	BaseVersion string
-	Timestamp   time.Time
-	CommitHash  string // 12-char abbreviated commit hash
+	BaseVersion string    // The semver prefix (e.g. v1.1.0-dev.0)
+	Timestamp   time.Time // Normalized commit timestamp
+	CommitHash  string    // 12-character abbreviated Git hash
 }
 
 // IsPseudoVersion reports whether ver looks like a Go pseudo-version.
@@ -74,8 +79,8 @@ func ParsePseudoVersion(ver string) (PseudoVersion, error) {
 	}, nil
 }
 
-// CommitsBehind returns a human-readable staleness description.
-// When exact commit count is unavailable, it falls back to time-based description.
+// CommitsBehind returns a human-friendly string describing the time delta
+// between two versions, used as a fallback for staleness reporting.
 func CommitsBehind(current, latest time.Time) string {
 	diff := latest.Sub(current)
 	switch {
@@ -88,8 +93,9 @@ func CommitsBehind(current, latest time.Time) string {
 	}
 }
 
-// CompareSemver compares two semver strings (e.g. "v1.2.3" vs "v1.3.0").
-// Returns -1 if a < b, 0 if a == b, 1 if a > b.
+// CompareSemver performs a numeric comparison of two semantic version strings.
+// Returns -1 if a < b, 0 if a == b, and 1 if a > b.
+// It ignores pre-release and metadata suffixes for the numeric comparison.
 func CompareSemver(a, b string) int {
 	aParts := parseSemverParts(a)
 	bParts := parseSemverParts(b)
@@ -106,12 +112,8 @@ func CompareSemver(a, b string) int {
 
 func parseSemverParts(ver string) [3]int {
 	ver = strings.TrimPrefix(ver, "v")
-	// Strip +incompatible and other metadata suffixes.
-	if idx := strings.Index(ver, "+"); idx >= 0 {
-		ver = ver[:idx]
-	}
-	// Strip pre-release/pseudo-version suffix for comparison.
-	if idx := strings.Index(ver, "-"); idx >= 0 {
+	// Clean up suffixes like +incompatible or -beta
+	if idx := strings.IndexAny(ver, "+-"); idx >= 0 {
 		ver = ver[:idx]
 	}
 	parts := strings.SplitN(ver, ".", 3)

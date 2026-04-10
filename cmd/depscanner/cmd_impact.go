@@ -37,7 +37,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	if cacheDir != "" {
 		cfg.CacheDir = cacheDir
 	}
-	
+
 	giteaClient := gitea.NewClient(cfg.Gitea.URL, cfg.Gitea.Token)
 	mgr := repo.NewManager(cfg.CacheDir, cfg.Gitea.Org)
 
@@ -54,16 +54,16 @@ func runImpact(cmd *cobra.Command, args []string) error {
 
 	// Phase 1: Diff
 	fmt.Printf("Phase 1: Diffing target module %s (%s → %s)...\n", cfg.TargetModule, shortenHash(from), shortenHash(to))
-	
+
 	if err := mgr.CheckoutCommit(targetRepo, from); err != nil {
 		return err
 	}
-	oldIndex, _ := analysis.BuildSymbolIndex(targetRepoPath)
+	oldIndex, _ := analysis.BuildSymbolIndex(targetRepoPath, cfg.TargetModule)
 
 	if err := mgr.CheckoutCommit(targetRepo, to); err != nil {
 		return err
 	}
-	newIndex, _ := analysis.BuildSymbolIndex(targetRepoPath)
+	newIndex, _ := analysis.BuildSymbolIndex(targetRepoPath, cfg.TargetModule)
 
 	changes := analysis.DiffSymbols(oldIndex, newIndex)
 	var interesting []analysis.SymbolChange
@@ -74,14 +74,16 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		if c.Breaking || c.Kind == analysis.ChangeLogic || c.Kind == analysis.ChangeAffected {
 			if c.Category == analysis.KindFunc || c.Category == analysis.KindMethod {
 				interesting = append(interesting, c)
-				
+
 				dotIdx := strings.LastIndex(c.Symbol, ".")
 				if dotIdx != -1 {
 					fullPkg := c.Symbol[:dotIdx]
 					funcName := c.Symbol[dotIdx+1:]
-					pkgParts := strings.Split(fullPkg, "/")
-					pkgBaseName := pkgParts[len(pkgParts)-1]
-					funcTargets = append(funcTargets, pkgBaseName+"."+funcName)
+					relPkg := ""
+					if fullPkg != cfg.TargetModule {
+						relPkg = strings.TrimPrefix(fullPkg, cfg.TargetModule+"/")
+					}
+					funcTargets = append(funcTargets, relPkg+"."+funcName)
 
 					// Track resolution using file-based history
 					// Find the symbol in newIndex to get its file path
@@ -115,13 +117,19 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	scannedCount := 0
 
 	processFn := func(r gitea.Repository, synced bool) {
-		if !synced { return }
+		if !synced {
+			return
+		}
 		repoPath := mgr.GetRepoPath(r.Name)
-		
+
 		goModPath := filepath.Join(repoPath, "go.mod")
-		if _, err := os.Stat(goModPath); err != nil { return }
+		if _, err := os.Stat(goModPath); err != nil {
+			return
+		}
 		info, _ := analysis.ParseGoMod(goModPath, cfg.TargetModule)
-		if !info.Found { return }
+		if !info.Found {
+			return
+		}
 
 		var allSites []analysis.CallSite
 		for _, target := range funcTargets {
@@ -160,7 +168,17 @@ func printImpactReport(targetRepoPath string, impacts []analysis.RepoImpact, cha
 	fmt.Printf("Impacting changes (breaking/logic): %d\n\n", len(changes))
 
 	if len(impacts) == 0 {
-		fmt.Printf("  \033[32m✓\033[0m No consumers are affected by these changes.\n")
+		fmt.Printf("Checked %d impactful symbols across all reservoirs:\n", len(changes))
+		for _, c := range changes {
+			icon := "·"
+			if c.Breaking {
+				icon = "\033[31m✗\033[0m"
+			} else if c.Kind == analysis.ChangeLogic {
+				icon = "\033[33m~\033[0m"
+			}
+			fmt.Printf("  %s %s: 0 call sites\n", icon, c.Symbol)
+		}
+		fmt.Printf("\n  \033[32m✓ No consumers are affected by these changes.\033[0m\n\n")
 		return nil
 	}
 
@@ -180,17 +198,23 @@ func printImpactReport(targetRepoPath string, impacts []analysis.RepoImpact, cha
 		if repoIsResolved {
 			status = "\033[32m✓ RESOLVED\033[0m"
 		}
-		
+
 		fmt.Printf("%s \033[1m%s\033[0m (current: %s)\n", status, ri.RepoName, ri.CurrentVersion)
 		for _, imp := range ri.Impacts {
 			intro := introCommits[imp.Change.Symbol]
 			repoVer := extractHash(ri.CurrentVersion)
 			symbolIsResolved := intro != "" && isAncestor(targetRepoPath, intro, repoVer)
-			
+
 			icon := "\033[31m✗\033[0m"
-			if imp.Change.Kind == analysis.ChangeLogic { icon = "\033[33m~\033[0m" }
-			if imp.Change.Kind == analysis.ChangeAffected { icon = "\033[34m·\033[0m" }
-			if symbolIsResolved { icon = "\033[32m✓\033[0m" }
+			if imp.Change.Kind == analysis.ChangeLogic {
+				icon = "\033[33m~\033[0m"
+			}
+			if imp.Change.Kind == analysis.ChangeAffected {
+				icon = "\033[34m·\033[0m"
+			}
+			if symbolIsResolved {
+				icon = "\033[32m✓\033[0m"
+			}
 
 			fmt.Printf("  %s %s — %d call sites:", icon, imp.Change.Symbol, len(imp.Sites))
 			if symbolIsResolved {
@@ -202,7 +226,7 @@ func printImpactReport(targetRepoPath string, impacts []analysis.RepoImpact, cha
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			for _, site := range imp.Sites {
-				fmt.Fprintf(w, "      %s:%d\t%s\n", site.File, site.Line, site.FuncName)
+				fmt.Fprintf(w, "      %s:%d\t%s\n", site.File, site.Line, site.RawName)
 			}
 			w.Flush()
 		}
@@ -234,9 +258,9 @@ func findSymbolIntroCommit(repoPath, from, to, filePath string, startLine, endLi
 	if len(out) == 0 {
 		return to
 	}
-	
+
 	commits := strings.Split(strings.TrimSpace(string(out)), "\n")
-	// The output of 'git log -L' might contain headers if not handled carefully, 
+	// The output of 'git log -L' might contain headers if not handled carefully,
 	// but with --pretty=format:%H we should get just hashes.
 	// However, git log -L is known to have some verbose output even with --pretty.
 	// We filter to ensure we only get valid hashes.

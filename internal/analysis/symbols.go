@@ -1,6 +1,8 @@
 package analysis
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -8,8 +10,6 @@ import (
 	"go/token"
 	"path/filepath"
 	"strings"
-	"bytes"
-	"crypto/sha256"
 )
 
 // SymbolKind represents the type of symbols (Func, Struct, etc.)
@@ -38,7 +38,7 @@ type Symbol struct {
 	Fields      []FieldInfo `json:"fields,omitempty"`
 	Methods     []string    `json:"methods,omitempty"`
 	Value       string      `json:"value,omitempty"`
-	TypeExpr    string      `json:"type_expr,omitempty"` 
+	TypeExpr    string      `json:"type_expr,omitempty"`
 	IsExported  bool        `json:"is_exported"`
 	BodyHash    string      `json:"body_hash,omitempty"`
 	UsedSymbols []string    `json:"used_symbols,omitempty"`
@@ -71,7 +71,7 @@ func (s Symbol) QualifiedName() string {
 type SymbolIndex map[string]Symbol
 
 // BuildSymbolIndex scans a directory for Go files and indexes all exported symbols.
-func BuildSymbolIndex(moduleDir string) (SymbolIndex, error) {
+func BuildSymbolIndex(moduleDir, modulePath string) (SymbolIndex, error) {
 	idx := make(SymbolIndex)
 	fset := token.NewFileSet()
 
@@ -81,7 +81,7 @@ func BuildSymbolIndex(moduleDir string) (SymbolIndex, error) {
 			return parseErr
 		}
 
-		pkgPath := getPackagePath(moduleDir, path, f.Name.Name)
+		pkgPath := getPackagePath(moduleDir, modulePath, path)
 
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch node := n.(type) {
@@ -100,13 +100,13 @@ func BuildSymbolIndex(moduleDir string) (SymbolIndex, error) {
 	return idx, err
 }
 
-func getPackagePath(moduleDir, filePath, pkgName string) string {
+func getPackagePath(moduleDir, modulePath, filePath string) string {
 	rel, _ := filepath.Rel(moduleDir, filePath)
 	dir := filepath.Dir(rel)
 	if dir == "." {
-		return pkgName
+		return modulePath
 	}
-	return filepath.ToSlash(dir)
+	return modulePath + "/" + filepath.ToSlash(dir)
 }
 
 func extractFunc(fset *token.FileSet, idx SymbolIndex, pkg string, fn *ast.FuncDecl) {

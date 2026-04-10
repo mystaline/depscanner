@@ -39,6 +39,7 @@ type callSiteResult struct {
 	Line     int    `json:"line"`
 	Column   int    `json:"column"`
 	FuncName string `json:"func_name"`
+	RawName  string `json:"raw_name"`
 	ArgCount int    `json:"arg_count"`
 }
 
@@ -219,6 +220,7 @@ func runScan(_ *cobra.Command, _ []string) error {
 					Line:     s.Line,
 					Column:   s.Column,
 					FuncName: s.FuncName,
+					RawName:  s.RawName,
 					ArgCount: s.ArgCount,
 				})
 			}
@@ -251,7 +253,7 @@ func runScan(_ *cobra.Command, _ []string) error {
 	}
 
 	processFnWithBranch := func(r gitea.Repository, _ bool) {
-		// This is a dummy call to SyncBranch inside the pipeline loop, 
+		// This is a dummy call to SyncBranch inside the pipeline loop,
 		// but since we want to sync the CORRECT branch for each repo:
 		targetBranch := cfg.GetBranchForRepo(r.Name, branch)
 		ok, err := mgr.SyncBranchQuiet(r.Name, r.CloneURL, targetBranch)
@@ -369,7 +371,7 @@ func runScan(_ *cobra.Command, _ []string) error {
 							matchStr = fmt.Sprintf("  %s✗ %d args (expected %d)%s", colorRed, cs.ArgCount, targetSig.ParamsCount, colorReset)
 						}
 					}
-					fmt.Printf("    %s:%d  %s%s\n", cs.File, cs.Line, cs.FuncName, matchStr)
+					fmt.Printf("    %s:%d  %s%s\n", cs.File, cs.Line, cs.RawName, matchStr)
 				}
 			}
 			if reposWithSites == 0 {
@@ -436,7 +438,6 @@ func statusIcon(status string) string {
 		return "?"
 	}
 }
-
 
 // filterRepos applies include/exclude lists from config.
 // Both include and exclude support glob patterns (*, ?, [...]) via path.Match.

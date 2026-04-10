@@ -11,6 +11,7 @@ type ImpactSite struct {
 	File     string `json:"file"`
 	Line     int    `json:"line"`
 	FuncName string `json:"func_name"`
+	RawName  string `json:"raw_name"`
 }
 
 // SymbolImpact describes the impact of a single breaking change on a repo.
@@ -62,6 +63,7 @@ func AnalyzeImpact(changes []SymbolChange, repoCallSites map[string][]CallSite) 
 						File:     site.File,
 						Line:     site.Line,
 						FuncName: site.FuncName,
+						RawName:  site.RawName,
 					})
 				}
 			}
@@ -108,20 +110,27 @@ func splitSymbolKey(key string) (pkg, name string) {
 }
 
 func matchesCallSite(site CallSite, pkgPath, funcName string) bool {
-	siteParts := strings.Split(site.FuncName, ".")
-	siteFuncName := siteParts[len(siteParts)-1]
+	dotIdx := strings.LastIndex(site.FuncName, ".")
+	if dotIdx == -1 {
+		return false
+	}
+	sitePkg := site.FuncName[:dotIdx]
+	siteFuncName := site.FuncName[dotIdx+1:]
+	
 	if siteFuncName != funcName {
 		return false
 	}
 
-	if pkgPath != "" && len(siteParts) >= 2 {
-		siteAlias := strings.Join(siteParts[:len(siteParts)-1], ".")
-		pkgParts := strings.Split(pkgPath, "/")
-		pkgBaseName := pkgParts[len(pkgParts)-1]
-
-		return strings.HasSuffix(siteAlias, pkgBaseName) || 
-		       strings.Contains(siteAlias, pkgBaseName) ||
-		       siteAlias == pkgBaseName
+	if pkgPath != "" {
+		if sitePkg == pkgPath {
+			return true
+		}
+		// Method support: if sitePkg is just an object name (no slashes), 
+		// and pkgPath is Package.Receiver
+		if strings.Contains(pkgPath, ".") && !strings.Contains(sitePkg, "/") {
+			return true
+		}
+		return false
 	}
 	return true
 }
