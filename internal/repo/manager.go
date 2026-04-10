@@ -121,6 +121,30 @@ func (m *Manager) SyncBranch(repoName, cloneURL, branch string) (bool, error) {
 	return true, nil
 }
 
+// GetOrgPath returns the local path for the organization directory.
+func (m *Manager) GetOrgPath() string {
+	return m.cacheDir
+}
+
+// ListLocalRepos lists all directories in the org cache as repositories.
+func (m *Manager) ListLocalRepos() ([]gitea.Repository, error) {
+	orgPath := m.GetOrgPath()
+	entries, err := os.ReadDir(orgPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var repos []gitea.Repository
+	for _, entry := range entries {
+		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+			repos = append(repos, gitea.Repository{
+				Name: entry.Name(),
+			})
+		}
+	}
+	return repos, nil
+}
+
 // GetRepoPath returns the local path for a given repo name.
 func (m *Manager) GetRepoPath(name string) string {
 	return filepath.Join(m.cacheDir, name)

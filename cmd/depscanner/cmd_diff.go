@@ -46,6 +46,9 @@ func runDiff(_ *cobra.Command, args []string) error {
 
 	// Ensure the target repo exists locally.
 	if _, statErr := os.Stat(repoPath); statErr != nil {
+		if cfg.Offline {
+			return fmt.Errorf("target module %q not found in cache (%s) and offline mode is enabled", cfg.TargetModule, repoPath)
+		}
 		targetOwner, _ := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
 		fmt.Printf("Cloning target module %s...\n", cfg.TargetModule)
 		cloneURL := fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo)
@@ -55,9 +58,11 @@ func runDiff(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	// Unshallow to access full history.
-	fmt.Printf("Fetching full history for %s...\n", targetRepo)
-	unshallowTargetRepo(repoPath)
+	// Unshallow to access full history if online.
+	if !cfg.Offline {
+		fmt.Printf("Fetching history for %s...\n", targetRepo)
+		unshallowTargetRepo(repoPath)
+	}
 
 	// Phase A
 	fmt.Printf("Building symbol index at %s...\n", from)

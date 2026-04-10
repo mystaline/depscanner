@@ -38,19 +38,26 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		cfg.CacheDir = cacheDir
 	}
 
-	giteaClient := gitea.NewClient(cfg.Gitea.URL, cfg.Gitea.Token)
 	mgr := repo.NewManager(cfg.CacheDir, cfg.Gitea.Org)
+
+	if cfg.Offline {
+		noFetch = true
+	}
 
 	_, targetRepo := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
 	targetRepoPath := mgr.GetRepoPath(targetRepo)
 
-	// Ensure target repo is updated and unshallowed for ancestry checks
-	unshallowTargetRepo(targetRepoPath)
-	if branch != "" {
-		// Ensure the specific branch we are interested in is fetched
-		_ = exec.Command("git", "-C", targetRepoPath, "fetch", "origin", branch+":"+branch, "--quiet").Run()
+	// Ensure target repo is updated and unshallowed for ancestry checks (if online)
+	if !noFetch {
+		unshallowTargetRepo(targetRepoPath)
+		if branch != "" {
+			// Ensure the specific branch we are interested in is fetched
+			_ = exec.Command("git", "-C", targetRepoPath, "fetch", "origin", branch+":"+branch, "--quiet").Run()
+		}
+		_ = exec.Command("git", "-C", targetRepoPath, "fetch", "--all", "--tags", "--quiet").Run()
+	} else if _, statErr := os.Stat(targetRepoPath); statErr != nil {
+		return fmt.Errorf("target module %q not found in cache (%s) and offline mode is enabled", cfg.TargetModule, targetRepoPath)
 	}
-	_ = exec.Command("git", "-C", targetRepoPath, "fetch", "--all", "--tags", "--quiet").Run()
 
 	// Phase 1: Diff
 	fmt.Printf("Phase 1: Diffing target module %s (%s → %s)...\n", cfg.TargetModule, shortenHash(from), shortenHash(to))
@@ -106,7 +113,23 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Found %d impactful changes (affecting %d functions)\n\n", len(interesting), len(funcTargets))
 
 	// Phase 2: Concurrent Scan
-	repos, _ := giteaClient.ListOrgRepos(cfg.Gitea.Org)
+	var repos []gitea.Repository
+	if cfg.Offline {
+		noFetch = true
+		fmt.Printf("Listing repositories from local cache: %s\n", mgr.GetOrgPath())
+		var lerr error
+		repos, lerr = mgr.ListLocalRepos()
+		if lerr != nil {
+			return fmt.Errorf("list local repos: %w", lerr)
+		}
+	} else {
+		giteaClient := gitea.NewClient(cfg.Gitea.URL, cfg.Gitea.Token)
+		var lerr error
+		repos, lerr = giteaClient.ListOrgRepos(cfg.Gitea.Org)
+		if lerr != nil {
+			return fmt.Errorf("list repos: %w", lerr)
+		}
+	}
 	repos = filterRepos(repos, cfg.IncludeRepos, cfg.ExcludeRepos)
 
 	fmt.Printf("Phase 2: Syncing and scanning %d repos (concurrent)...\n", len(repos))
@@ -146,7 +169,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		mu.Unlock()
 	}
 
-	if branch != "" {
+	if branch != "" && !cfg.Offline {
 		mgr.PipelineSyncBranchAndProcess(repos, branch, noFetch, 4, processFn)
 	} else {
 		mgr.PipelineSyncAndProcess(repos, noFetch, 4, processFn)

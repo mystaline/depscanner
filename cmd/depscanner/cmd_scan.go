@@ -94,22 +94,34 @@ func runScan(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("config: %w", err)
 	}
 
-	giteaClient := gitea.NewClient(cfg.Gitea.URL, cfg.Gitea.Token)
+	mgr := repo.NewManager(cfg.CacheDir, cfg.Gitea.Org)
 
-	fmt.Printf("Fetching repository list from %s...\n", cfg.Gitea.URL)
-	repos, err := giteaClient.ListOrgRepos(cfg.Gitea.Org)
-	if err != nil {
-		return fmt.Errorf("list repos: %w", err)
+	var repos []gitea.Repository
+	if cfg.Offline {
+		noFetch = true
+		fmt.Printf("Listing repositories from local cache: %s\n", mgr.GetOrgPath())
+		var lerr error
+		repos, lerr = mgr.ListLocalRepos()
+		if lerr != nil {
+			return fmt.Errorf("list local repos: %w", lerr)
+		}
+	} else {
+		giteaClient := gitea.NewClient(cfg.Gitea.URL, cfg.Gitea.Token)
+		fmt.Printf("Fetching repository list from %s...\n", cfg.Gitea.URL)
+		var lerr error
+		repos, lerr = giteaClient.ListOrgRepos(cfg.Gitea.Org)
+		if lerr != nil {
+			return fmt.Errorf("list repos: %w", lerr)
+		}
 	}
 	repos = filterRepos(repos, cfg.IncludeRepos, cfg.ExcludeRepos)
 	fmt.Printf("Found %d repositories\n\n", len(repos))
 
-	mgr := repo.NewManager(cfg.CacheDir, cfg.Gitea.Org)
-
 	// Resolve the target module's latest commit for the tracked branch.
 	var latestTargetHash string
 	targetBranch := ""
-	if branch != "" {
+	if branch != "" && !cfg.Offline {
+		giteaClient := gitea.NewClient(cfg.Gitea.URL, cfg.Gitea.Token)
 		targetBranch = cfg.BranchTracking[branch]
 		if targetBranch == "" {
 			targetBranch = branch // default: same name
@@ -135,26 +147,34 @@ func runScan(_ *cobra.Command, _ []string) error {
 		targetOwner, targetRepo := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
 		if targetOwner != "" {
 			targetPath := mgr.GetRepoPath(targetRepo)
-			if _, statErr := os.Stat(targetPath); statErr != nil {
-				fmt.Printf("Syncing target module for signature check...\n")
-				_, syncErr := mgr.SyncBranch(targetRepo, fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo), targetBranch)
-				if syncErr != nil {
-					fmt.Fprintf(os.Stderr, "  warn: failed to sync target module: %v\n", syncErr)
+			
+			// Try to sync unless offline
+			if !cfg.Offline {
+				if _, statErr := os.Stat(targetPath); statErr != nil {
+					fmt.Printf("Syncing target module for signature check...\n")
+					_, syncErr := mgr.SyncBranch(targetRepo, fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo), targetBranch)
+					if syncErr != nil {
+						fmt.Fprintf(os.Stderr, "  warn: failed to sync target module: %v\n", syncErr)
+					}
 				}
 			}
 
-			sig, sigErr := analysis.ParseSignature(targetPath, funcName)
-			if sigErr != nil {
-				fmt.Fprintf(os.Stderr, "  warn: could not parse signature for %q: %v\n", funcName, sigErr)
-			} else {
-				targetSig = sig
-				fmt.Printf("Parsed signature for %q: %d params%s\n\n",
-					funcName, sig.ParamsCount, func() string {
-						if sig.IsVariadic {
-							return "+"
-						}
-						return ""
-					}())
+			if _, statErr := os.Stat(targetPath); statErr == nil {
+				sig, sigErr := analysis.ParseSignature(targetPath, funcName)
+				if sigErr != nil {
+					fmt.Fprintf(os.Stderr, "  warn: could not parse signature for %q: %v\n", funcName, sigErr)
+				} else {
+					targetSig = sig
+					fmt.Printf("Parsed signature for %q: %d params%s\n\n",
+						funcName, sig.ParamsCount, func() string {
+							if sig.IsVariadic {
+								return "+"
+							}
+							return ""
+						}())
+				}
+			} else if cfg.Offline {
+				fmt.Fprintf(os.Stderr, "  warn: target module %q not found in cache (%s), cannot check signatures offline\n", targetRepo, targetPath)
 			}
 		}
 	}

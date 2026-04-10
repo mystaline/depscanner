@@ -27,18 +27,21 @@ type Config struct {
 	ExcludeRepos    []string          `yaml:"exclude_repos"`
 	DefaultBranch   string            `yaml:"default_branch"`
 	BranchTracking  map[string]string `yaml:"branch_tracking"`
+	Offline         bool              `yaml:"offline"`
 }
 
 // Validate checks that all required fields are present.
 func (c *Config) Validate() error {
-	if c.Gitea.URL == "" {
-		return fmt.Errorf("gitea.url is required")
-	}
-	if c.Gitea.Token == "" {
-		return fmt.Errorf("gitea.token is required")
-	}
-	if c.Gitea.Org == "" {
-		return fmt.Errorf("gitea.org is required")
+	if !c.Offline {
+		if c.Gitea.URL == "" {
+			return fmt.Errorf("gitea.url is required when not in offline mode")
+		}
+		if c.Gitea.Token == "" {
+			return fmt.Errorf("gitea.token is required when not in offline mode")
+		}
+		if c.Gitea.Org == "" {
+			return fmt.Errorf("gitea.org is required when not in offline mode")
+		}
 	}
 	if c.TargetModule == "" {
 		return fmt.Errorf("target_module is required")
