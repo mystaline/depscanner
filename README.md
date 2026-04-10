@@ -268,7 +268,7 @@ go test ./... -cover
 
 **Current coverage:**
 
-- `internal/analysis`: 49.8% (diff, impact, version, gomod parsing)
+- `internal/analysis`: 48.7% (diff, impact, version, gomod parsing)
 - `internal/config`: 86.0% (config loading, validation, env expansion)
 - `internal/gitea`: 90.7% (Gitea API client mocking)
 

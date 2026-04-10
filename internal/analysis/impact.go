@@ -39,7 +39,8 @@ type matchTarget struct {
 func AnalyzeImpact(changes []SymbolChange, repoCallSites map[string][]CallSite) []RepoImpact {
 	var targets []matchTarget
 	for _, c := range changes {
-		if c.Breaking || c.Kind == ChangeLogic || c.Kind == ChangeAffected {
+		// Report impact for any change that isn't just a simple Addition
+		if c.Kind != ChangeAdded {
 			pkg, name := splitSymbolKey(c.Symbol)
 			targets = append(targets, matchTarget{
 				pkg:      pkg,

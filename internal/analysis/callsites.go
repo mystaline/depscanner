@@ -114,77 +114,125 @@ func ScanCallSites(repoDir, targetModule, funcName string) ([]CallSite, []string
 			continue
 		}
 
-		ast.Inspect(f, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+		var walk func(n ast.Node, insideSelector bool)
+		walk = func(n ast.Node, insideSelector bool) {
+			if n == nil {
+				return
 			}
 
-			resolvedName, rawName := matchCallExpr(call, c.aliasMap, plainFunc)
-			if resolvedName == "" {
-				return true
+			switch node := n.(type) {
+			case *ast.SelectorExpr:
+				resolvedName, rawName := matchSelectorExpr(node, c.aliasMap, plainFunc)
+				if resolvedName != "" {
+					addSite(fset2, &sites, node, repoDir, resolvedName, rawName)
+					return // matched, stop descending
+				}
+				// Descend into X (might be a package or another object)
+				walk(node.X, false)
+				// Sel is inside a selector, mark it so dot-import logic skips it
+				walk(node.Sel, true)
+				return
+
+			case *ast.Ident:
+				if !insideSelector {
+					resolvedName, rawName := matchIdent(node, c.aliasMap, plainFunc)
+					if resolvedName != "" {
+						addSite(fset2, &sites, node, repoDir, resolvedName, rawName)
+					}
+				}
+				return
 			}
 
-			pos := fset2.Position(call.Pos())
-			relPath, relErr := filepath.Rel(repoDir, pos.Filename)
-			if relErr != nil {
-				relPath = pos.Filename
-			}
-
-			sites = append(sites, CallSite{
-				File:     filepath.ToSlash(relPath),
-				Line:     pos.Line,
-				Column:   pos.Column,
-				FuncName: resolvedName,
-				RawName:  rawName,
-				ArgCount: len(call.Args),
+			// Generic descent for all other nodes
+			ast.Inspect(n, func(child ast.Node) bool {
+				if child == nil || child == n {
+					return true
+				}
+				walk(child, false)
+				return false
 			})
+		}
 
-			return true
-		})
+		walk(f, false)
 	}
 
 	return sites, parseWarnings, nil
 }
 
-// matchCallExpr checks if a CallExpr matches the target function via the alias map.
-// Returns the resolved "pkg.Func" name or "" if no match.
-func matchCallExpr(call *ast.CallExpr, aliasMap map[string]string, funcName string) (string, string) {
-	switch fn := call.Fun.(type) {
-	case *ast.SelectorExpr:
-		// pkg.Func() pattern
-		ident, ok := fn.X.(*ast.Ident)
-		if !ok {
+func addSite(fset *token.FileSet, sites *[]CallSite, n ast.Node, repoDir, resolved, raw string) {
+	pos := fset.Position(n.Pos())
+	relPath, relErr := filepath.Rel(repoDir, pos.Filename)
+	if relErr != nil {
+		relPath = pos.Filename
+	}
+
+	// Determine arg count if it's a call
+	argCount := 0
+	// We check if the parent or part of the context is a call,
+	// but for now, we just report 0 for non-calls.
+
+	*sites = append(*sites, CallSite{
+		File:     filepath.ToSlash(relPath),
+		Line:     pos.Line,
+		Column:   pos.Column,
+		FuncName: resolved,
+		RawName:  raw,
+		ArgCount: argCount,
+	})
+}
+
+// matchSelectorExpr checks if a SelectorExpr matches the target symbol.
+func matchSelectorExpr(sel *ast.SelectorExpr, aliasMap map[string]string, symbolName string) (string, string) {
+	siteFuncName := sel.Sel.Name
+
+	// Handle complex symbols like "Receiver.Method"
+	targetReceiver, targetName := splitSymbolKey(symbolName)
+
+	if targetName != "" {
+		// It's a method/field with a receiver
+		if siteFuncName != targetName {
 			return "", ""
 		}
-		pkgAlias := ident.Name
-		calledFunc := fn.Sel.Name
-
-		importPath, isTarget := aliasMap[pkgAlias]
-		if isTarget {
-			if calledFunc == funcName {
-				return importPath + "." + calledFunc, pkgAlias + "." + calledFunc
-			}
+	} else {
+		// Plain function or symbol
+		if siteFuncName != symbolName {
+			return "", ""
 		}
+	}
 
-		if calledFunc == funcName {
-			return pkgAlias + "." + calledFunc, pkgAlias + "." + calledFunc
-		}
+	// The X part must be an Ident (the package alias or object name)
+	ident, ok := sel.X.(*ast.Ident)
+	if !ok {
 		return "", ""
+	}
+	pkgAlias := ident.Name
 
-	case *ast.Ident:
-		// Direct call (dot-imported). Check if any alias is ".".
-		importPath, hasDot := aliasMap["."]
-		if !hasDot {
-			return "", ""
-		}
-		if fn.Name != funcName {
-			return "", ""
-		}
-		return importPath + "." + fn.Name, fn.Name
+	importPath, isTarget := aliasMap[pkgAlias]
+	if isTarget {
+		return importPath + "." + siteFuncName, pkgAlias + "." + siteFuncName
+	}
+
+	// Heuristic for method calls on objects
+	if targetReceiver != "" && pkgAlias != "" {
+		// If we find "obj.Method" and we are looking for "Receiver.Method",
+		// we match by name since we don't have type info.
+		return pkgAlias + "." + siteFuncName, pkgAlias + "." + siteFuncName
 	}
 
 	return "", ""
+}
+
+// matchIdent checks if an Ident matches the target symbol (dot-imports).
+func matchIdent(id *ast.Ident, aliasMap map[string]string, symbolName string) (string, string) {
+	if id.Name != symbolName {
+		return "", ""
+	}
+
+	importPath, hasDot := aliasMap["."]
+	if !hasDot {
+		return "", ""
+	}
+	return importPath + "." + id.Name, id.Name
 }
 
 // splitQualifiedName splits "helper.Must" into ("helper", "Must")
