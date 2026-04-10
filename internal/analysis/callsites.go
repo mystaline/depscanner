@@ -121,9 +121,33 @@ func ScanCallSites(repoDir, targetModule, funcName string) ([]CallSite, []string
 			}
 
 			switch node := n.(type) {
+			case *ast.CallExpr:
+				// First check if the Fun of this CallExpr matches
+				var resolvedName, rawName string
+				switch fun := node.Fun.(type) {
+				case *ast.SelectorExpr:
+					resolvedName, rawName = matchSelectorExpr(fun, c.aliasMap, plainFunc)
+				case *ast.Ident:
+					if !insideSelector {
+						resolvedName, rawName = matchIdent(fun, c.aliasMap, plainFunc)
+					}
+				}
+
+				if resolvedName != "" {
+					// We found a CALL site!
+					addSite(fset2, &sites, node, repoDir, resolvedName, rawName)
+					// We still want to walk the arguments of the call (they might contain other calls)
+					for _, arg := range node.Args {
+						walk(arg, false)
+					}
+					// IMPORTANT: Do NOT walk node.Fun because we already processed it
+					return
+				}
+
 			case *ast.SelectorExpr:
 				resolvedName, rawName := matchSelectorExpr(node, c.aliasMap, plainFunc)
 				if resolvedName != "" {
+					// We found a REFERENCE (not necessarily a call)
 					addSite(fset2, &sites, node, repoDir, resolvedName, rawName)
 					return // matched, stop descending
 				}
@@ -168,8 +192,9 @@ func addSite(fset *token.FileSet, sites *[]CallSite, n ast.Node, repoDir, resolv
 
 	// Determine arg count if it's a call
 	argCount := 0
-	// We check if the parent or part of the context is a call,
-	// but for now, we just report 0 for non-calls.
+	if call, ok := n.(*ast.CallExpr); ok {
+		argCount = len(call.Args)
+	}
 
 	*sites = append(*sites, CallSite{
 		File:     filepath.ToSlash(relPath),
