@@ -131,16 +131,16 @@ func printDiffTable(from, to string, changes []analysis.SymbolChange) error {
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, c := range changes {
-		icon := colorGreen + "+" + colorReset
+		icon := formatter.ColorGreen() + "+" + formatter.ColorReset()
 		label := "additive"
 		if c.Breaking {
-			icon = colorRed + "✗" + colorReset
+			icon = formatter.ColorRed() + "✗" + formatter.ColorReset()
 			label = "BREAKING"
 		} else if c.Kind == analysis.ChangeLogic {
-			icon = colorYellow + "~" + colorReset
+			icon = formatter.ColorYellow() + "~" + formatter.ColorReset()
 			label = "LOGIC"
 		} else if c.Kind == analysis.ChangeAffected {
-			icon = "\033[34m" + "·" + colorReset
+			icon = formatter.ColorBlue() + "·" + formatter.ColorReset()
 			label = "IMPACTED"
 		}
 

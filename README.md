@@ -34,6 +34,24 @@ make install      # installs to $GOPATH/bin
 
 Requires Go 1.22+ and git.
 
+### Windows Setup
+
+depscanner runs natively on Windows and WSL2. Ensure the following are installed:
+
+1. **Go 1.22+**: Download from [golang.org](https://golang.org/dl)
+2. **Git**: Install [Git for Windows](https://git-scm.com/download/win) or use `choco install git` if using Chocolatey
+3. **Verify Installation**:
+   ```cmd
+   go version
+   git --version
+   ```
+
+**Cache Directory**: On Windows, depscanner stores cached repositories in `%USERPROFILE%\.depscanner\repos` by default. You can override with `--cache-dir` flag or set `cache_dir` in config.
+
+**Terminal Support**: Output works best in Windows Terminal, PowerShell 7+, or modern cmd.exe. Older cmd.exe may not display Unicode symbols correctly.
+
+**WSL2**: If using WSL2 Fedora/Ubuntu, install Go and Git in the WSL distribution, then use depscanner normally. Cache directories are inside WSL.
+
 ## Configuration
 
 Copy the example config and fill in your values:

@@ -18,12 +18,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const (
-	colorGreen  = "\033[32m"
-	colorRed    = "\033[31m"
-	colorYellow = "\033[33m"
-	colorReset  = "\033[0m"
-)
 
 // staleness levels for branch-aware scanning.
 const (
@@ -323,15 +317,15 @@ func runScan(_ *cobra.Command, _ []string) error {
 		switch {
 		case !r.HasGoMod:
 			if branch != "" {
-				fmt.Fprintf(w, "  %s✗%s\t%s\t%s\t\n", colorRed, colorReset, r.Name, "(no go.mod)")
+				fmt.Fprintf(w, "  %s✗%s\t%s\t%s\t\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(no go.mod)")
 			} else {
-				fmt.Fprintf(w, "  %s✗%s\t%s\t%s\n", colorRed, colorReset, r.Name, "(no go.mod)")
+				fmt.Fprintf(w, "  %s✗%s\t%s\t%s\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(no go.mod)")
 			}
 		case !r.UsesTarget:
 			if branch != "" {
-				fmt.Fprintf(w, "  %s·%s\t%s\t%s\t\n", colorRed, colorReset, r.Name, "(not used)")
+				fmt.Fprintf(w, "  %s·%s\t%s\t%s\t\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(not used)")
 			} else {
-				fmt.Fprintf(w, "  %s·%s\t%s\t%s\n", colorRed, colorReset, r.Name, "(not used)")
+				fmt.Fprintf(w, "  %s·%s\t%s\t%s\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(not used)")
 			}
 		case branch != "" && r.Status != "":
 			versionCol := r.TargetVersion
@@ -340,11 +334,11 @@ func runScan(_ *cobra.Command, _ []string) error {
 			}
 			statusColor := statusToColor(r.Status)
 			fmt.Fprintf(w, "  %s%s%s\t%s\t%s\t%s%s%s\n",
-				statusColor, statusIcon(r.Status), colorReset,
+				statusColor, statusIcon(r.Status), formatter.ColorReset(),
 				r.Name, versionCol,
-				statusColor, r.StatusDetail, colorReset)
+				statusColor, r.StatusDetail, formatter.ColorReset())
 		default:
-			fmt.Fprintf(w, "  %s✓%s\t%s\t%s\n", colorGreen, colorReset, r.Name, r.TargetVersion)
+			fmt.Fprintf(w, "  %s✓%s\t%s\t%s\n", formatter.ColorGreen(), formatter.ColorReset(), r.Name, r.TargetVersion)
 		}
 	}
 	w.Flush()
@@ -374,7 +368,7 @@ func runScan(_ *cobra.Command, _ []string) error {
 				}
 				reposWithSites++
 				totalSites += len(r.CallSites)
-				fmt.Printf("\n  %s%s%s (%d call sites):\n", colorGreen, r.Name, colorReset, len(r.CallSites))
+				fmt.Printf("\n  %s%s%s (%d call sites):\n", formatter.ColorGreen(), r.Name, formatter.ColorReset(), len(r.CallSites))
 				for _, cs := range r.CallSites {
 					matchStr := ""
 					if targetSig != nil {
@@ -386,9 +380,9 @@ func runScan(_ *cobra.Command, _ []string) error {
 						}
 
 						if match {
-							matchStr = fmt.Sprintf("  %s✓ %d args%s", colorGreen, cs.ArgCount, colorReset)
+							matchStr = fmt.Sprintf("  %s✓ %d args%s", formatter.ColorGreen(), cs.ArgCount, formatter.ColorReset())
 						} else {
-							matchStr = fmt.Sprintf("  %s✗ %d args (expected %d)%s", colorRed, cs.ArgCount, targetSig.ParamsCount, colorReset)
+							matchStr = fmt.Sprintf("  %s✗ %d args (expected %d)%s", formatter.ColorRed(), cs.ArgCount, targetSig.ParamsCount, formatter.ColorReset())
 						}
 					}
 					fmt.Printf("    %s:%d  %s%s\n", cs.File, cs.Line, cs.RawName, matchStr)
@@ -436,13 +430,13 @@ func detectStaleness(version, latestHash string) (commitHash, status, detail str
 func statusToColor(status string) string {
 	switch status {
 	case statusOK:
-		return colorGreen
+		return formatter.ColorGreen()
 	case statusStale:
-		return colorYellow
+		return formatter.ColorYellow()
 	case statusCritical:
-		return colorRed
+		return formatter.ColorRed()
 	default:
-		return colorReset
+		return formatter.ColorReset()
 	}
 }
 

@@ -44,8 +44,20 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		noFetch = true
 	}
 
-	_, targetRepo := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
+	targetOwner, targetRepo := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
 	targetRepoPath := mgr.GetRepoPath(targetRepo)
+
+	// Clone target repo if not present locally.
+	if _, statErr := os.Stat(targetRepoPath); statErr != nil {
+		if cfg.Offline {
+			return fmt.Errorf("target module %q not found in cache (%s) and offline mode is enabled", cfg.TargetModule, targetRepoPath)
+		}
+		fmt.Printf("Cloning target module %s...\n", cfg.TargetModule)
+		cloneURL := fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo)
+		if err := mgr.SyncRepos([]gitea.Repository{{Name: targetRepo, CloneURL: cloneURL}}, false); err != nil {
+			return fmt.Errorf("clone target module: %w", err)
+		}
+	}
 
 	// Ensure target repo is updated and unshallowed for ancestry checks (if online)
 	if !noFetch {
@@ -195,13 +207,13 @@ func printImpactReport(targetRepoPath string, impacts []analysis.RepoImpact, cha
 		for _, c := range changes {
 			icon := "·"
 			if c.Breaking {
-				icon = "\033[31m✗\033[0m"
+				icon = formatter.ColorRed() + "✗" + formatter.ColorReset()
 			} else if c.Kind == analysis.ChangeLogic {
-				icon = "\033[33m~\033[0m"
+				icon = formatter.ColorYellow() + "~" + formatter.ColorReset()
 			}
 			fmt.Printf("  %s %s: 0 call sites\n", icon, c.Symbol)
 		}
-		fmt.Printf("\n  \033[32m✓ No consumers are affected by these changes.\033[0m\n\n")
+		formatter.Printf("\n  %s✓ No consumers are affected by these changes.%s\n\n", formatter.ColorGreen(), formatter.ColorReset())
 		return nil
 	}
 
@@ -217,35 +229,35 @@ func printImpactReport(targetRepoPath string, impacts []analysis.RepoImpact, cha
 			}
 		}
 
-		status := "\033[31m⚠ ACTION REQUIRED\033[0m"
+		status := formatter.ColorRed() + "⚠ ACTION REQUIRED" + formatter.ColorReset()
 		if repoIsResolved {
-			status = "\033[32m✓ RESOLVED\033[0m"
+			status = formatter.ColorGreen() + "✓ RESOLVED" + formatter.ColorReset()
 		}
 
-		fmt.Printf("%s \033[1m%s\033[0m (current: %s)\n", status, ri.RepoName, ri.CurrentVersion)
+		formatter.Printf("%s %s%s%s (current: %s)\n", status, formatter.ColorBold(), ri.RepoName, formatter.ColorReset(), ri.CurrentVersion)
 		for _, imp := range ri.Impacts {
 			intro := introCommits[imp.Change.Symbol]
 			repoVer := extractHash(ri.CurrentVersion)
 			symbolIsResolved := intro != "" && isAncestor(targetRepoPath, intro, repoVer)
 
-			icon := "\033[31m✗\033[0m"
+			icon := formatter.ColorRed() + "✗" + formatter.ColorReset()
 			if imp.Change.Kind == analysis.ChangeLogic {
-				icon = "\033[33m~\033[0m"
+				icon = formatter.ColorYellow() + "~" + formatter.ColorReset()
 			}
 			if imp.Change.Kind == analysis.ChangeAffected {
-				icon = "\033[34m·\033[0m"
+				icon = formatter.ColorBlue() + "·" + formatter.ColorReset()
 			}
 			if symbolIsResolved {
-				icon = "\033[32m✓\033[0m"
+				icon = formatter.ColorGreen() + "✓" + formatter.ColorReset()
 			}
 
-			fmt.Printf("  %s %s — %d call sites:", icon, imp.Change.Symbol, len(imp.Sites))
+			formatter.Printf("  %s %s — %d call sites:", icon, imp.Change.Symbol, len(imp.Sites))
 			if symbolIsResolved {
-				fmt.Printf(" \033[32m(resolved in %s)\033[0m", shortenHash(intro))
+				formatter.Printf(" %s(resolved in %s)%s", formatter.ColorGreen(), shortenHash(intro), formatter.ColorReset())
 			} else if intro != "" {
-				fmt.Printf(" \033[33m(needs commit %s)\033[0m", shortenHash(intro))
+				formatter.Printf(" %s(needs commit %s)%s", formatter.ColorYellow(), shortenHash(intro), formatter.ColorReset())
 			}
-			fmt.Println()
+			formatter.Println()
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			for _, site := range imp.Sites {
@@ -266,6 +278,7 @@ func findSymbolIntroCommit(repoPath, from, to, filePath string, startLine, endLi
 	if strings.Contains(filePath, repoPath) {
 		filePath, _ = filepath.Rel(repoPath, filePath)
 	}
+	filePath = filepath.ToSlash(filePath)
 
 	// Surgical tracking: find the first commit in the range that touched THESE lines.
 	// We use the line numbers from the 'to' commit.

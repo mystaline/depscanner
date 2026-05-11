@@ -11,6 +11,8 @@ import (
 
 var version = "0.6.0"
 
+var formatter OutputFormatter
+
 var (
 	cfgPath  string
 	cacheDir string
@@ -30,6 +32,8 @@ var (
 )
 
 func init() {
+	formatter = NewOutputFormatter()
+
 	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "", "config file (default: $HOME/.depscanner.yaml)")
 	rootCmd.PersistentFlags().StringVar(&cacheDir, "cache-dir", "", "local repo cache directory (overrides config)")
 	rootCmd.PersistentFlags().StringVar(&format, "format", "table", "output format: table | json")
