@@ -139,7 +139,7 @@ func TestValidate(t *testing.T) {
 				TargetModule: "github.com/example/lib",
 			},
 			expectErr: true,
-			errMsg:    "gitea.url is required",
+			errMsg:    "gitea.url is required when not in offline mode",
 		},
 		{
 			name: "missing gitea.token",
@@ -151,7 +151,7 @@ func TestValidate(t *testing.T) {
 				TargetModule: "github.com/example/lib",
 			},
 			expectErr: true,
-			errMsg:    "gitea.token is required",
+			errMsg:    "gitea.token is required when not in offline mode",
 		},
 		{
 			name: "missing gitea.org",
@@ -163,7 +163,7 @@ func TestValidate(t *testing.T) {
 				TargetModule: "github.com/example/lib",
 			},
 			expectErr: true,
-			errMsg:    "gitea.org is required",
+			errMsg:    "gitea.org is required when not in offline mode",
 		},
 		{
 			name: "missing target_module",
