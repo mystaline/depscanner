@@ -37,6 +37,15 @@ type callSiteResult struct {
 	ArgCount int    `json:"arg_count"`
 }
 
+// typeRefResult is the JSON-serializable representation of a type reference.
+type typeRefResult struct {
+	File     string `json:"file"`
+	Line     int    `json:"line"`
+	TypeName string `json:"type_name"`
+	RawName  string `json:"raw_name"`
+	Context  string `json:"context"`
+}
+
 type repoScanResult struct {
 	Name          string           `json:"name"`
 	Branch        string           `json:"branch,omitempty"`
@@ -49,6 +58,7 @@ type repoScanResult struct {
 	StatusDetail  string           `json:"status_detail,omitempty"`
 	Packages      []string         `json:"packages,omitempty"`
 	CallSites     []callSiteResult `json:"call_sites,omitempty"`
+	TypeRefs      []typeRefResult  `json:"type_refs,omitempty"`
 	CloneURL      string           `json:"clone_url,omitempty"`
 }
 
@@ -57,6 +67,7 @@ type scanOutput struct {
 	TargetModule    string                  `json:"target_module"`
 	Branch          string                  `json:"branch,omitempty"`
 	FuncName        string                  `json:"func_name,omitempty"`
+	TypeName        string                  `json:"type_name,omitempty"`
 	TargetSignature *analysis.FuncSignature `json:"target_signature,omitempty"`
 	Total           int                     `json:"total"`
 	GoModCount      int                     `json:"go_mod_count"`
@@ -71,8 +82,9 @@ func newScanCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&packages, "packages", false, "show which sub-packages of the target module are imported")
-	cmd.Flags().StringVar(&funcName, "func", "", "search for call sites of a specific function (e.g. \"Must\" or \"helper.Must\")")
-	cmd.Flags().BoolVar(&check, "check", false, "check call-site signatures against target module (requires --func)")
+	cmd.Flags().StringVar(&funcName, "func", "", "show call sites for a function (e.g. \"Must\" or \"helper.Must\") — reports file, line, arg count")
+	cmd.Flags().StringVar(&typeName, "type", "", "show usage of a type/interface from target module (e.g. \"SchedulerService\" or \"service.SchedulerService\")")
+	cmd.Flags().BoolVar(&check, "check", false, "validate arg counts against the actual target module signature (requires --func, clones target module)")
 	return cmd
 }
 
@@ -240,6 +252,24 @@ func runScan(_ *cobra.Command, _ []string) error {
 			}
 		}
 
+		// Type/interface reference search.
+		var typeRefs []typeRefResult
+		if typeName != "" && usesTarget {
+			refs, scanErr := analysis.ScanTypeReferences(repoPath, cfg.TargetModule, typeName)
+			if scanErr != nil {
+				fmt.Fprintf(os.Stderr, "  warn: scan type refs for %s: %v\n", r.Name, scanErr)
+			}
+			for _, ref := range refs {
+				typeRefs = append(typeRefs, typeRefResult{
+					File:     ref.File,
+					Line:     ref.Line,
+					TypeName: ref.TypeName,
+					RawName:  ref.RawName,
+					Context:  ref.Context,
+				})
+			}
+		}
+
 		result := repoScanResult{
 			Name:          r.Name,
 			Branch:        targetBranchForRepo,
@@ -247,6 +277,7 @@ func runScan(_ *cobra.Command, _ []string) error {
 			UsesTarget:    usesTarget,
 			Packages:      pkgs,
 			CallSites:     callSites,
+			TypeRefs:      typeRefs,
 			TargetVersion: targetVersion,
 			CommitHash:    commitHash,
 			LatestHash:    shortenHash(latestTargetHash),
@@ -296,6 +327,7 @@ func runScan(_ *cobra.Command, _ []string) error {
 			TargetModule:    cfg.TargetModule,
 			Branch:          branch,
 			FuncName:        funcName,
+			TypeName:        typeName,
 			TargetSignature: targetSig,
 			Total:           len(results),
 			GoModCount:      goModCount,
@@ -392,6 +424,33 @@ func runScan(_ *cobra.Command, _ []string) error {
 				fmt.Printf("  (no call sites found in %d repos that use target module)\n", targetCount)
 			} else {
 				fmt.Printf("\n  Total: %d call sites across %d repos\n", totalSites, reposWithSites)
+			}
+		}
+	}
+
+	// Show type/interface references when --type is active.
+	if typeName != "" {
+		fmt.Printf("\nType references for %q:\n", typeName)
+		if targetCount == 0 {
+			fmt.Printf("  (no repos use target module %s)\n", cfg.TargetModule)
+		} else {
+			totalRefs := 0
+			reposWithRefs := 0
+			for _, r := range results {
+				if len(r.TypeRefs) == 0 {
+					continue
+				}
+				reposWithRefs++
+				totalRefs += len(r.TypeRefs)
+				fmt.Printf("\n  %s%s%s (%d references):\n", formatter.ColorGreen(), r.Name, formatter.ColorReset(), len(r.TypeRefs))
+				for _, ref := range r.TypeRefs {
+					fmt.Printf("    %s:%d  %s\n", ref.File, ref.Line, ref.RawName)
+				}
+			}
+			if reposWithRefs == 0 {
+				fmt.Printf("  (no type references found in %d repos that use target module)\n", targetCount)
+			} else {
+				fmt.Printf("\n  Total: %d references across %d repos\n", totalRefs, reposWithRefs)
 			}
 		}
 	}

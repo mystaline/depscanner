@@ -21,6 +21,7 @@ var (
 	branch   string
 	packages bool
 	funcName string
+	typeName string
 	check    bool
 
 	rootCmd = &cobra.Command{

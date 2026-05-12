@@ -3,6 +3,8 @@ package analysis
 import (
 	"go/ast"
 	"go/parser"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -129,6 +131,94 @@ func TestMatchCallExpr(t *testing.T) {
 			if foundResolved != tt.wantResolved || foundRaw != tt.wantRaw {
 				t.Errorf("%s: match failed\nexpr: %s\ngot:  (%q, %q)\nwant: (%q, %q)", 
 					tt.name, tt.expr, foundResolved, foundRaw, tt.wantResolved, tt.wantRaw)
+			}
+		})
+	}
+}
+
+func TestScanCallSites(t *testing.T) {
+	dir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(`package main
+
+import (
+	util "example.com/org/shared-lib/util"
+	helper "example.com/org/shared-lib/helper"
+	. "example.com/org/shared-lib/dot"
+)
+
+func main() {
+	util.Must("prefix", "arg1")
+	helper.DoWork(1, 2, 3)
+	BareFunc("dot-import")
+	_, _ = util.Calculate(42), helper.Format("hello")
+}
+
+func multiLine() {
+	util.Must(
+		"a",
+		"b",
+		"c",
+	)
+}
+
+func nested() {
+	util.Must("x", helper.Format("nested"))
+	helper.DoWork(util.Calculate(7), 2, 3)
+}
+
+func unusedFunc() {}
+`), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Second file with different alias — tests multi-file repos
+	err = os.WriteFile(filepath.Join(dir, "other.go"), []byte(`package main
+
+import u "example.com/org/shared-lib/util"
+
+func fromOtherFile() {
+	u.Must("a", "b")
+}
+`), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	target := "example.com/org/shared-lib"
+
+	tests := []struct {
+		label    string
+		funcName string
+		wantMin  int
+	}{
+		{"plain func (multi-file)", "Must", 3},    // main ×2 + other.go
+		{"qualified func", "util.Must", 3},
+		{"func in another pkg", "DoWork", 2},       // main + nested
+		{"qualified other pkg", "helper.DoWork", 2},
+		{"func returning value", "Calculate", 2},    // main + nested
+		{"func with single arg", "Format", 2},       // main + nested
+		{"dot import func", "BareFunc", 1},
+		{"qualified dot import", "dot.BareFunc", 0},
+		{"nonexistent func", "NoSuchFunc", 0},
+		{"unused target func", "UnusedHelper", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			sites, warnings, err := ScanCallSites(dir, target, tt.funcName)
+			if err != nil {
+				t.Fatalf("ScanCallSites(%q): %v", tt.funcName, err)
+			}
+			for _, w := range warnings {
+				t.Logf("warn: %s", w)
+			}
+			if len(sites) < tt.wantMin {
+				t.Errorf("%q: got %d sites, want >= %d", tt.funcName, len(sites), tt.wantMin)
+			}
+			for _, s := range sites {
+				t.Logf("  %s:%d %s (%d args)", s.File, s.Line, s.RawName, s.ArgCount)
 			}
 		})
 	}

@@ -87,11 +87,13 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	changes := analysis.DiffSymbols(oldIndex, newIndex)
 	var interesting []analysis.SymbolChange
 	var funcTargets []string
+	var typeTargets []string
 	symbolIntroCommits := make(map[string]string)
 
 	for _, c := range changes {
 		if c.Breaking || c.Kind == analysis.ChangeLogic || c.Kind == analysis.ChangeAffected {
-			if c.Category == analysis.KindFunc || c.Category == analysis.KindMethod {
+			switch c.Category {
+			case analysis.KindFunc, analysis.KindMethod:
 				interesting = append(interesting, c)
 
 				dotIdx := strings.LastIndex(c.Symbol, ".")
@@ -104,8 +106,6 @@ func runImpact(cmd *cobra.Command, args []string) error {
 					}
 					funcTargets = append(funcTargets, relPkg+"."+funcName)
 
-					// Track resolution using file-based history
-					// Find the symbol in newIndex to get its file path
 					for _, sym := range newIndex {
 						if sym.QualifiedName() == c.Symbol {
 							intro := findSymbolIntroCommit(targetRepoPath, from, to, sym.File, sym.StartLine, sym.EndLine)
@@ -113,6 +113,13 @@ func runImpact(cmd *cobra.Command, args []string) error {
 							break
 						}
 					}
+				}
+
+			case analysis.KindStruct, analysis.KindInterface, analysis.KindType:
+				interesting = append(interesting, c)
+				_, typeName := analysis.SplitQualifiedName(c.Symbol)
+				if typeName != "" {
+					typeTargets = append(typeTargets, typeName)
 				}
 			}
 		}
@@ -122,7 +129,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		fmt.Printf("\nNo impactful changes detected.\n")
 		return nil
 	}
-	fmt.Printf("  Found %d impactful changes (affecting %d functions)\n\n", len(interesting), len(funcTargets))
+	fmt.Printf("  Found %d impactful changes (%d funcs, %d types)\n\n", len(interesting), len(funcTargets), len(typeTargets))
 
 	// Phase 2: Concurrent Scan
 	var repos []gitea.Repository
@@ -148,6 +155,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 
 	var mu sync.Mutex
 	repoCallSites := make(map[string][]analysis.CallSite)
+	repoTypeRefs := make(map[string][]analysis.TypeRef)
 	repoVersions := make(map[string]string)
 	scannedCount := 0
 
@@ -172,10 +180,21 @@ func runImpact(cmd *cobra.Command, args []string) error {
 			allSites = append(allSites, sites...)
 		}
 
+		var allTypeRefs []analysis.TypeRef
+		for _, target := range typeTargets {
+			refs, _ := analysis.ScanTypeReferences(repoPath, cfg.TargetModule, target)
+			allTypeRefs = append(allTypeRefs, refs...)
+		}
+
 		mu.Lock()
 		scannedCount++
-		if len(allSites) > 0 {
-			repoCallSites[r.Name] = allSites
+		if len(allSites) > 0 || len(allTypeRefs) > 0 {
+			if len(allSites) > 0 {
+				repoCallSites[r.Name] = allSites
+			}
+			if len(allTypeRefs) > 0 {
+				repoTypeRefs[r.Name] = allTypeRefs
+			}
 			repoVersions[r.Name] = info.Version
 		}
 		mu.Unlock()
@@ -190,9 +209,30 @@ func runImpact(cmd *cobra.Command, args []string) error {
 
 	// Phase 3: Analyzing impact
 	fmt.Printf("Phase 3: Analyzing impact for %d matched repositories...\n", scannedCount)
-	impacts := analysis.AnalyzeImpact(changes, repoCallSites)
-	for i := range impacts {
-		impacts[i].CurrentVersion = repoVersions[impacts[i].RepoName]
+	funcImpacts := analysis.AnalyzeImpact(changes, repoCallSites)
+	typeImpacts := analysis.AnalyzeTypeImpact(changes, repoTypeRefs)
+
+	// Merge func + type impacts per repo
+	impactMap := make(map[string]*analysis.RepoImpact)
+	for _, ri := range funcImpacts {
+		copy := ri
+		impactMap[ri.RepoName] = &copy
+	}
+	for _, ri := range typeImpacts {
+		if existing, ok := impactMap[ri.RepoName]; ok {
+			existing.Impacts = append(existing.Impacts, ri.Impacts...)
+			existing.BreakingCount += ri.BreakingCount
+			existing.TotalSites += ri.TotalSites
+		} else {
+			copy := ri
+			impactMap[ri.RepoName] = &copy
+		}
+	}
+
+	var impacts []analysis.RepoImpact
+	for _, ri := range impactMap {
+		ri.CurrentVersion = repoVersions[ri.RepoName]
+		impacts = append(impacts, *ri)
 	}
 
 	return printImpactReport(targetRepoPath, impacts, interesting, scannedCount, from, to, symbolIntroCommits)

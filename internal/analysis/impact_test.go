@@ -325,3 +325,57 @@ func TestFormatImpactSummaryWithImpacts(t *testing.T) {
 		t.Errorf("FormatImpactSummary() = %q, unexpected", summary)
 	}
 }
+
+func TestAnalyzeTypeImpact(t *testing.T) {
+	changes := []SymbolChange{
+		{
+			Symbol:   "gitea.example.com/org/shared-lib/service.SchedulerService",
+			Kind:     ChangeRemoved,
+			Category: KindInterface,
+			Breaking: true,
+		},
+		{
+			Symbol:   "gitea.example.com/org/shared-lib/service.Config",
+			Kind:     ChangeFieldRemoved,
+			Category: KindStruct,
+			Breaking: false,
+		},
+		// Func changes should be ignored by AnalyzeTypeImpact
+		{
+			Symbol:   "gitea.example.com/org/shared-lib/helper.DoWork",
+			Kind:     ChangeRemoved,
+			Category: KindFunc,
+			Breaking: true,
+		},
+	}
+
+	repoTypeRefs := map[string][]TypeRef{
+		"app1": {
+			{File: "main.go", Line: 10, TypeName: "gitea.example.com/org/shared-lib/service.SchedulerService", RawName: "svc.SchedulerService", Context: "field"},
+			{File: "main.go", Line: 15, TypeName: "gitea.example.com/org/shared-lib/service.SchedulerService", RawName: "svc.SchedulerService", Context: "param"},
+			{File: "service.go", Line: 5, TypeName: "gitea.example.com/org/shared-lib/service.Config", RawName: "svc.Config", Context: "var"},
+		},
+		"app2": {
+			{File: "handler.go", Line: 20, TypeName: "gitea.example.com/org/shared-lib/service.Config", RawName: "s.Config", Context: "field"},
+		},
+	}
+
+	impacts := AnalyzeTypeImpact(changes, repoTypeRefs)
+	if len(impacts) != 2 {
+		t.Fatalf("expected 2 impacted repos, got %d", len(impacts))
+	}
+
+	if impacts[0].RepoName != "app1" {
+		t.Errorf("first repo = %q, want app1", impacts[0].RepoName)
+	}
+	if impacts[0].TotalSites != 3 {
+		t.Errorf("app1 TotalSites = %d, want 3", impacts[0].TotalSites)
+	}
+
+	if impacts[1].RepoName != "app2" {
+		t.Errorf("second repo = %q, want app2", impacts[1].RepoName)
+	}
+	if impacts[1].TotalSites != 1 {
+		t.Errorf("app2 TotalSites = %d, want 1", impacts[1].TotalSites)
+	}
+}

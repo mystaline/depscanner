@@ -268,3 +268,8 @@ func splitQualifiedName(name string) (pkg, fn string) {
 	}
 	return "", name
 }
+
+// SplitQualifiedName is the public version of splitQualifiedName.
+func SplitQualifiedName(name string) (pkg, fn string) {
+	return splitQualifiedName(name)
+}

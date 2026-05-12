@@ -102,6 +102,85 @@ func AnalyzeImpact(changes []SymbolChange, repoCallSites map[string][]CallSite) 
 	return result
 }
 
+// AnalyzeTypeImpact cross-references type/interface/struct changes with type refs
+// found in consumer repos. Used alongside AnalyzeImpact for full change coverage.
+func AnalyzeTypeImpact(changes []SymbolChange, repoTypeRefs map[string][]TypeRef) []RepoImpact {
+	type matchTarget struct {
+		pkg     string
+		name    string
+		change  SymbolChange
+	}
+	var targets []matchTarget
+	for _, c := range changes {
+		if c.Category != KindStruct && c.Category != KindInterface && c.Category != KindType {
+			continue
+		}
+		if c.Kind == ChangeAdded {
+			continue
+		}
+		_, name := splitQualifiedName(c.Symbol)
+		if name == "" {
+			continue
+		}
+		targets = append(targets, matchTarget{
+			name:   name,
+			change: c,
+		})
+	}
+
+	if len(targets) == 0 {
+		return nil
+	}
+
+	repoImpacts := make(map[string]*RepoImpact)
+	for repoName, refs := range repoTypeRefs {
+		for _, target := range targets {
+			var matched []ImpactSite
+			for _, ref := range refs {
+				_, refName := splitQualifiedName(ref.TypeName)
+				if refName == target.name {
+					matched = append(matched, ImpactSite{
+						File:     ref.File,
+						Line:     ref.Line,
+						FuncName: ref.TypeName,
+						RawName:  ref.RawName + " [" + ref.Context + "]",
+					})
+				}
+			}
+
+			if len(matched) == 0 {
+				continue
+			}
+
+			ri, exists := repoImpacts[repoName]
+			if !exists {
+				ri = &RepoImpact{RepoName: repoName}
+				repoImpacts[repoName] = ri
+			}
+
+			ri.Impacts = append(ri.Impacts, SymbolImpact{
+				Change: target.change,
+				Sites:  matched,
+			})
+			ri.BreakingCount++
+			ri.TotalSites += len(matched)
+		}
+	}
+
+	var result []RepoImpact
+	for _, ri := range repoImpacts {
+		result = append(result, *ri)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].BreakingCount != result[j].BreakingCount {
+			return result[i].BreakingCount > result[j].BreakingCount
+		}
+		return result[i].RepoName < result[j].RepoName
+	})
+
+	return result
+}
+
 func splitSymbolKey(key string) (pkg, name string) {
 	dotIdx := strings.LastIndex(key, ".")
 	if dotIdx != -1 {
