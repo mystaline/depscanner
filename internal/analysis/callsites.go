@@ -17,13 +17,25 @@ type CallSite struct {
 	FuncName string // the resolved function name (e.g. "github.com/org/lib/helper.Must")
 	RawName  string // the original name in code (e.g. "helper.Must")
 	ArgCount int    // number of arguments in the call
+
+	// Set when the call was detected via a DI-injected struct field.
+	// e.g. u.SchedulerService.Schedule(...) sets ViaField="SchedulerService"
+	ViaField     string
+	ViaFieldType string // fully qualified, e.g. "github.com/org/lib/service.SchedulerService"
 }
 
-// ScanCallSites walks a repo directory and finds all call sites of funcName
-// within packages imported from targetModule.
+// diFieldEntry records that a named struct field has a type originating from the target module.
+type diFieldEntry struct {
+	importPath string // e.g. "github.com/org/lib/service"
+	typeName   string // e.g. "SchedulerService"
+}
+
+// ScanSymbolReferences walks a repo directory and finds all references to symbolName
+// within packages imported from targetModule. Handles both call expressions
+// (func/method calls) and plain identifier references (const, var).
 //
-// funcName can be:
-//   - A plain name like "Must" — matches in any sub-package of targetModule
+// symbolName can be:
+//   - A plain name like "ErrNotFound" — matches in any sub-package of targetModule
 //   - A qualified name like "helper.Must" — matches only in that sub-package
 //
 // Two-pass optimization: first pass uses ImportsOnly to filter files that
@@ -31,19 +43,27 @@ type CallSite struct {
 //
 // The returned warnings list contains diagnostics for files that passed the
 // import-only parse but failed full AST parse (likely syntax errors).
-func ScanCallSites(repoDir, targetModule, funcName string) ([]CallSite, []string, error) {
-	// Parse funcName into optional package qualifier and function name.
-	qualPkg, plainFunc := splitQualifiedName(funcName)
+func ScanSymbolReferences(repoDir, targetModule, symbolName string) ([]CallSite, []string, error) {
+	qualPkg, plainFunc := splitQualifiedName(symbolName)
 	if plainFunc == "" {
-		return nil, nil, fmt.Errorf("invalid function name %q: missing function name component", funcName)
+		return nil, nil, fmt.Errorf("invalid symbol name %q: missing name component", symbolName)
 	}
 
-	// Pass 1: collect files that import target module + build alias map.
+	// Pass 1: single walk collects two sets of candidates.
+	//
+	//  • candidates / candidateDirs  — files whose imports match qualPkg (for direct calls)
+	//  • diCandidates / diCandidateDirs — files importing ANY part of target module
+	//                                     (for DI field index; ignores qualPkg because
+	//                                     qualPkg is a pkg-level filter but a type qualifier
+	//                                     like "SchedulerService" won't match the "service" pkg)
 	type fileImport struct {
 		path     string
 		aliasMap map[string]string // alias/pkg name -> full import path
 	}
 	var candidates []fileImport
+	candidateDirs := make(map[string]bool)
+	var diCandidates []fileImport
+	diCandidateDirs := make(map[string]bool)
 	fset := token.NewFileSet()
 
 	err := WalkGoFiles(repoDir, func(path string) error {
@@ -52,44 +72,55 @@ func ScanCallSites(repoDir, targetModule, funcName string) ([]CallSite, []string
 			return nil // skip unparseable
 		}
 
-		aliases := make(map[string]string)
+		// allAliases: every import from target module (used for DI field scanning)
+		allAliases := make(map[string]string)
+		// filteredAliases: only imports matching qualPkg (used for direct call scanning)
+		filteredAliases := make(map[string]string)
+
 		for _, imp := range f.Imports {
 			importPath := strings.Trim(imp.Path.Value, `"`)
+			if importPath != targetModule && !strings.HasPrefix(importPath, targetModule+"/") {
+				continue
+			}
 
-			if importPath == targetModule || strings.HasPrefix(importPath, targetModule+"/") {
-				// Derive the canonical package name from the import path.
-				parts := strings.Split(importPath, "/")
-				pkgBaseName := parts[len(parts)-1]
+			parts := strings.Split(importPath, "/")
+			pkgBaseName := parts[len(parts)-1]
+			isDot := imp.Name != nil && imp.Name.Name == "."
 
-				// If user specified a package qualifier, match against the relative
-				// part of the import path. Dot imports are always
-				// included since they merge into the caller's namespace.
-				isDot := imp.Name != nil && imp.Name.Name == "."
-				if qualPkg != "" && !isDot {
-					relPath := ""
-					if importPath != targetModule {
-						relPath = strings.TrimPrefix(importPath, targetModule+"/")
-					}
-					// Method support: qualPkg might be "pkg.Receiver", so we check prefix
-					if relPath != qualPkg && pkgBaseName != qualPkg && !strings.HasPrefix(qualPkg, relPath+".") {
-						continue
-					}
+			var localName string
+			if imp.Name != nil {
+				localName = imp.Name.Name
+			} else {
+				localName = pkgBaseName
+			}
+
+			// Always add to allAliases (DI field index needs every target-module import).
+			allAliases[localName] = importPath
+
+			// Add to filteredAliases only when the import matches the qualPkg filter.
+			matchesQual := true
+			if qualPkg != "" && !isDot {
+				relPath := ""
+				if importPath != targetModule {
+					relPath = strings.TrimPrefix(importPath, targetModule+"/")
 				}
-
-				// Determine the local name used in code (explicit alias or last path segment).
-				var localName string
-				if imp.Name != nil {
-					localName = imp.Name.Name
-				} else {
-					localName = pkgBaseName
+				// Method support: qualPkg might be "pkg.Receiver", so we check prefix
+				if relPath != qualPkg && pkgBaseName != qualPkg && !strings.HasPrefix(qualPkg, relPath+".") {
+					matchesQual = false
 				}
-
-				aliases[localName] = importPath
+			}
+			if matchesQual {
+				filteredAliases[localName] = importPath
 			}
 		}
 
-		if len(aliases) > 0 {
-			candidates = append(candidates, fileImport{path: path, aliasMap: aliases})
+		if len(allAliases) > 0 {
+			diCandidates = append(diCandidates, fileImport{path: path, aliasMap: allAliases})
+			diCandidateDirs[filepath.Dir(path)] = true
+		}
+		if len(filteredAliases) > 0 {
+			candidates = append(candidates, fileImport{path: path, aliasMap: filteredAliases})
+			candidateDirs[filepath.Dir(path)] = true
 		}
 		return nil
 	})
@@ -97,17 +128,33 @@ func ScanCallSites(repoDir, targetModule, funcName string) ([]CallSite, []string
 		return nil, nil, fmt.Errorf("walk repo: %w", err)
 	}
 
-	if len(candidates) == 0 {
+	// No files import the target module at all — nothing to do.
+	if len(diCandidates) == 0 {
 		return nil, nil, nil
 	}
 
-	// Pass 2: full AST parse on candidate files, find CallExpr matching funcName.
+	// Pass 1b: build DI field index from all target-module importers.
+	// Uses allAliases (not the qualPkg-filtered aliases) so type qualifiers like
+	// "SchedulerService.Schedule" find fields whose type lives in package "service".
+	diFieldIndex := make(map[string][]diFieldEntry) // fieldName → entries
+	fsetDI := token.NewFileSet()
+	for _, c := range diCandidates {
+		f, parseErr := parser.ParseFile(fsetDI, c.path, nil, 0)
+		if parseErr != nil {
+			continue
+		}
+		extractDIFields(f, c.aliasMap, diFieldIndex)
+	}
+
+	// Pass 2: full AST parse on candidate files (qualPkg-filtered), find direct CallExpr.
 	// Use a fresh FileSet to avoid unbounded offset growth from double-parsing.
 	fset2 := token.NewFileSet()
 	var sites []CallSite
 	var parseWarnings []string
+	scannedInPass2 := make(map[string]bool)
 
 	for _, c := range candidates {
+		scannedInPass2[c.path] = true
 		f, parseErr := parser.ParseFile(fset2, c.path, nil, parser.ParseComments)
 		if parseErr != nil {
 			parseWarnings = append(parseWarnings, fmt.Sprintf("%s: %v", c.path, parseErr))
@@ -178,9 +225,243 @@ func ScanCallSites(repoDir, targetModule, funcName string) ([]CallSite, []string
 		}
 
 		walk(f, false)
+
+		// Also scan this candidate for DI calls (obj.field.method where field is from target module).
+		if len(diFieldIndex) > 0 {
+			sites = append(sites, scanDICallSites(f, fset2, repoDir, diFieldIndex, plainFunc, qualPkg)...)
+		}
 	}
 
+	// Pass 3: scan sibling files (same dirs as DI candidates, not yet scanned) for DI calls.
+	// These files don't import the target module directly but may call methods on DI fields.
+	// Uses diCandidateDirs (not candidateDirs) so type-qualifier searches like
+	// "SchedulerService.Schedule" still find callers even when no direct-call candidates exist.
+	if len(diFieldIndex) > 0 {
+		fset3 := token.NewFileSet()
+		if walkErr := WalkGoFiles(repoDir, func(path string) error {
+			if scannedInPass2[path] {
+				return nil
+			}
+			if !diCandidateDirs[filepath.Dir(path)] {
+				return nil
+			}
+			f, parseErr := parser.ParseFile(fset3, path, nil, parser.ParseComments)
+			if parseErr != nil {
+				parseWarnings = append(parseWarnings, fmt.Sprintf("%s: %v", path, parseErr))
+				return nil
+			}
+			sites = append(sites, scanDICallSites(f, fset3, repoDir, diFieldIndex, plainFunc, qualPkg)...)
+			return nil
+		}); walkErr != nil {
+			parseWarnings = append(parseWarnings, fmt.Sprintf("pass3 walk: %v", walkErr))
+		}
+	}
+
+	// Deduplicate sites by (File, Line, Column) to guard against any double-scan edge cases
+	// where both the direct-call heuristic and the DI scanner fire for the same expression.
+	// DI sites (ViaField != "") are preferred over plain sites at the same position.
+	sites = deduplicateSites(sites)
+
 	return sites, parseWarnings, nil
+}
+
+// deduplicateSites removes duplicate CallSites at the same (File, Line, Column).
+// When a DI site and a plain site share a position, the DI site (ViaField != "") is kept.
+func deduplicateSites(sites []CallSite) []CallSite {
+	type key struct{ file string; line, col int }
+	seen := make(map[key]int, len(sites)) // key → index in result
+	result := make([]CallSite, 0, len(sites))
+	for _, s := range sites {
+		k := key{s.File, s.Line, s.Column}
+		if idx, dup := seen[k]; dup {
+			// Prefer DI site over plain site at the same position.
+			if s.ViaField != "" && result[idx].ViaField == "" {
+				result[idx] = s
+			}
+			continue
+		}
+		seen[k] = len(result)
+		result = append(result, s)
+	}
+	return result
+}
+
+// extractDIFields scans a parsed file for struct fields whose type comes from the target module
+// (as indicated by aliasMap), and populates the shared diFieldIndex.
+//
+// Supported field type forms:
+//   - pkg.Type, *pkg.Type            — direct or pointer
+//   - []pkg.Type, []*pkg.Type        — slice of direct or pointer
+//   - Type (dot-import)              — bare ident via `import . "pkg"`
+//
+// Known limitations: embedded (anonymous) fields, map/chan field types, and
+// multi-level slice types ([][]*T) are not indexed.
+func extractDIFields(f *ast.File, aliasMap map[string]string, index map[string][]diFieldEntry) {
+	ast.Inspect(f, func(n ast.Node) bool {
+		st, ok := n.(*ast.StructType)
+		if !ok {
+			return true
+		}
+		for _, field := range st.Fields.List {
+			if field.Type == nil || len(field.Names) == 0 {
+				// len(Names)==0 means anonymous/embedded field — not tracked (requires
+				// type info to resolve promoted method calls like h.Schedule()).
+				continue
+			}
+			addDIFieldEntry(field, aliasMap, index)
+		}
+		return true
+	})
+}
+
+// addDIFieldEntry resolves a single struct field's type and adds it to index if it
+// comes from the target module. Handles pointer, slice-of-pointer, and dot-import forms.
+func addDIFieldEntry(field *ast.Field, aliasMap map[string]string, index map[string][]diFieldEntry) {
+	expr := field.Type
+
+	// Unwrap pointer: *T → T
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = star.X
+	}
+	// Unwrap slice: []T or []*T → T
+	if arr, ok := expr.(*ast.ArrayType); ok {
+		expr = arr.Elt
+		if star, ok2 := expr.(*ast.StarExpr); ok2 {
+			expr = star.X
+		}
+	}
+
+	var entry diFieldEntry
+	switch e := expr.(type) {
+	case *ast.SelectorExpr:
+		// pkg.Type (normal import)
+		pkgIdent, ok := e.X.(*ast.Ident)
+		if !ok {
+			return
+		}
+		importPath, isTarget := aliasMap[pkgIdent.Name]
+		if !isTarget {
+			return
+		}
+		entry = diFieldEntry{importPath: importPath, typeName: e.Sel.Name}
+
+	case *ast.Ident:
+		// Bare type name from a dot-import (import . "pkg")
+		importPath, isDot := aliasMap["."]
+		if !isDot {
+			return
+		}
+		entry = diFieldEntry{importPath: importPath, typeName: e.Name}
+
+	default:
+		return
+	}
+
+	for _, nameIdent := range field.Names {
+		existing := index[nameIdent.Name]
+		dup := false
+		for _, e := range existing {
+			if e.importPath == entry.importPath && e.typeName == entry.typeName {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			index[nameIdent.Name] = append(existing, entry)
+		}
+	}
+}
+
+// scanDICallSites walks a file looking for chained selector calls of the form obj.field.method(...)
+// where field is a known DI field from the target module and method matches the searched symbol.
+//
+// typeQualifier (the qualPkg portion of the symbol) is matched via matchesDIQualifier, which
+// handles bare type names ("SchedulerService"), package segments ("service"), and the composite
+// "pkgseg.TypeName" form produced by the impact command ("service.SchedulerService").
+//
+// All matching entries for a given field name are emitted (one CallSite per entry), so when
+// two structs in the same package declare a field with the same name but different target-module
+// types, both are reported with distinct ViaFieldType values.
+func scanDICallSites(f *ast.File, fset *token.FileSet, repoDir string, diFieldIndex map[string][]diFieldEntry, methodName, typeQualifier string) []CallSite {
+	var sites []CallSite
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		outerSel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		// outerSel.Sel is the method being called.
+		if outerSel.Sel.Name != methodName {
+			return true
+		}
+		// outerSel.X must be another SelectorExpr representing the field access.
+		innerSel, ok := outerSel.X.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		fieldName := innerSel.Sel.Name
+		entries, exists := diFieldIndex[fieldName]
+		if !exists {
+			return true
+		}
+		for _, entry := range entries {
+			// typeQualifier can be:
+			//   ""                      — match everything
+			//   "SchedulerService"         — type name only
+			//   "service"               — package segment only
+			//   "service.SchedulerService" — pkg.Type composite (built by impact command)
+			if typeQualifier != "" && !matchesDIQualifier(entry, typeQualifier) {
+				continue
+			}
+			pos := fset.Position(call.Pos())
+			relPath, relErr := filepath.Rel(repoDir, pos.Filename)
+			if relErr != nil {
+				relPath = pos.Filename
+			}
+			// FuncName uses pkg.Method (not pkg.Type.Method) so matchesCallSite in
+			// AnalyzeImpact can do an exact package match. Type info is in ViaFieldType.
+			sites = append(sites, CallSite{
+				File:         filepath.ToSlash(relPath),
+				Line:         pos.Line,
+				Column:       pos.Column,
+				FuncName:     entry.importPath + "." + methodName,
+				RawName:      fieldName + "." + methodName,
+				ArgCount:     len(call.Args),
+				ViaField:     fieldName,
+				ViaFieldType: entry.importPath + "." + entry.typeName,
+			})
+			// Continue — emit one site per qualifying entry (multiple entries can exist
+			// when different structs in the same package share a field name with different types).
+		}
+		return true
+	})
+	return sites
+}
+
+// matchesDIQualifier reports whether a diFieldEntry satisfies the given typeQualifier.
+// Handles three qualifier forms:
+//   - "SchedulerService"         → match by type name
+//   - "service"               → match by last path segment of import path
+//   - "service.SchedulerService" → match by both (composite form from impact command)
+func matchesDIQualifier(entry diFieldEntry, typeQualifier string) bool {
+	pkgSuffix := entry.importPath
+	if idx := strings.LastIndex(pkgSuffix, "/"); idx >= 0 {
+		pkgSuffix = pkgSuffix[idx+1:]
+	}
+	// Simple: type name or package segment match
+	if entry.typeName == typeQualifier || pkgSuffix == typeQualifier {
+		return true
+	}
+	// Composite "pkgseg.TypeName": split at last dot
+	if dotIdx := strings.LastIndex(typeQualifier, "."); dotIdx >= 0 {
+		qualPkgSeg := typeQualifier[:dotIdx]
+		qualType := typeQualifier[dotIdx+1:]
+		return pkgSuffix == qualPkgSeg && entry.typeName == qualType
+	}
+	return false
 }
 
 func addSite(fset *token.FileSet, sites *[]CallSite, n ast.Node, repoDir, resolved, raw string) {
