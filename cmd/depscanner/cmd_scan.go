@@ -27,51 +27,69 @@ const (
 	statusUnknown  = "unknown"
 )
 
-// callSiteResult is the JSON-serializable representation of a function call site.
+// callSiteResult is the JSON-serializable representation of a function or method call site.
 type callSiteResult struct {
-	File     string `json:"file"`
-	Line     int    `json:"line"`
-	Column   int    `json:"column"`
-	FuncName string `json:"func_name"`
-	RawName  string `json:"raw_name"`
-	ArgCount int    `json:"arg_count"`
+	SearchedFor string `json:"searched_for"`
+	File        string `json:"file"`
+	Line        int    `json:"line"`
+	Column      int    `json:"column"`
+	FuncName    string `json:"func_name"`
+	RawName     string `json:"raw_name"`
+	ArgCount    int    `json:"arg_count"`
 }
 
 // typeRefResult is the JSON-serializable representation of a type reference.
 type typeRefResult struct {
-	File     string `json:"file"`
-	Line     int    `json:"line"`
-	TypeName string `json:"type_name"`
-	RawName  string `json:"raw_name"`
-	Context  string `json:"context"`
+	SearchedFor string `json:"searched_for"`
+	File        string `json:"file"`
+	Line        int    `json:"line"`
+	TypeName    string `json:"type_name"`
+	RawName     string `json:"raw_name"`
+	Context     string `json:"context"`
+}
+
+// symbolRefResult is the JSON-serializable representation of a const or var reference.
+type symbolRefResult struct {
+	SearchedFor string `json:"searched_for"`
+	File        string `json:"file"`
+	Line        int    `json:"line"`
+	Column      int    `json:"column"`
+	Name        string `json:"name"`
+	RawName     string `json:"raw_name"`
 }
 
 type repoScanResult struct {
-	Name          string           `json:"name"`
-	Branch        string           `json:"branch,omitempty"`
-	HasGoMod      bool             `json:"has_go_mod"`
-	UsesTarget    bool             `json:"uses_target"`
-	TargetVersion string           `json:"target_version,omitempty"`
-	CommitHash    string           `json:"commit_hash,omitempty"`
-	LatestHash    string           `json:"latest_hash,omitempty"`
-	Status        string           `json:"status,omitempty"`
-	StatusDetail  string           `json:"status_detail,omitempty"`
-	Packages      []string         `json:"packages,omitempty"`
-	CallSites     []callSiteResult `json:"call_sites,omitempty"`
-	TypeRefs      []typeRefResult  `json:"type_refs,omitempty"`
-	CloneURL      string           `json:"clone_url,omitempty"`
+	Name          string            `json:"name"`
+	Branch        string            `json:"branch,omitempty"`
+	HasGoMod      bool              `json:"has_go_mod"`
+	UsesTarget    bool              `json:"uses_target"`
+	TargetVersion string            `json:"target_version,omitempty"`
+	CommitHash    string            `json:"commit_hash,omitempty"`
+	LatestHash    string            `json:"latest_hash,omitempty"`
+	Status        string            `json:"status,omitempty"`
+	StatusDetail  string            `json:"status_detail,omitempty"`
+	Packages      []string          `json:"packages,omitempty"`
+	CallSites     []callSiteResult  `json:"call_sites,omitempty"`
+	MethodSites   []callSiteResult  `json:"method_sites,omitempty"`
+	TypeRefs      []typeRefResult   `json:"type_refs,omitempty"`
+	ConstRefs     []symbolRefResult `json:"const_refs,omitempty"`
+	VarRefs       []symbolRefResult `json:"var_refs,omitempty"`
+	CloneURL      string            `json:"clone_url,omitempty"`
 }
 
 type scanOutput struct {
-	Repos           []repoScanResult        `json:"repos"`
-	TargetModule    string                  `json:"target_module"`
-	Branch          string                  `json:"branch,omitempty"`
-	FuncName        string                  `json:"func_name,omitempty"`
-	TypeName        string                  `json:"type_name,omitempty"`
-	TargetSignature *analysis.FuncSignature `json:"target_signature,omitempty"`
-	Total           int                     `json:"total"`
-	GoModCount      int                     `json:"go_mod_count"`
-	TargetCount     int                     `json:"target_count"`
+	Repos        []repoScanResult        `json:"repos"`
+	TargetModule string                  `json:"target_module"`
+	Branch       string                  `json:"branch,omitempty"`
+	FuncNames    []string                `json:"func_names,omitempty"`
+	MethodNames  []string                `json:"method_names,omitempty"`
+	TypeNames    []string                `json:"type_names,omitempty"`
+	ConstNames   []string                `json:"const_names,omitempty"`
+	VarNames     []string                `json:"var_names,omitempty"`
+	Signatures   map[string]int          `json:"signatures,omitempty"` // funcName → param count
+	Total        int                     `json:"total"`
+	GoModCount   int                     `json:"go_mod_count"`
+	TargetCount  int                     `json:"target_count"`
 }
 
 func newScanCmd() *cobra.Command {
@@ -82,9 +100,12 @@ func newScanCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&packages, "packages", false, "show which sub-packages of the target module are imported")
-	cmd.Flags().StringVar(&funcName, "func", "", "show call sites for a function (e.g. \"Must\" or \"helper.Must\") — reports file, line, arg count")
-	cmd.Flags().StringVar(&typeName, "type", "", "show usage of a type/interface from target module (e.g. \"SchedulerService\" or \"service.SchedulerService\")")
-	cmd.Flags().BoolVar(&check, "check", false, "validate arg counts against the actual target module signature (requires --func, clones target module)")
+	cmd.Flags().StringSliceVar(&funcNames, "func", nil, "show call sites for functions, comma-separated (e.g. \"Must,helper.Process\")")
+	cmd.Flags().StringSliceVar(&methodNames, "method", nil, "show call sites for methods, comma-separated (e.g. \"Client.Do,Conn.Close\")")
+	cmd.Flags().StringSliceVar(&typeNames, "type", nil, "show references to types or interfaces, comma-separated (e.g. \"Logger,Config\")")
+	cmd.Flags().StringSliceVar(&constNames, "const", nil, "show references to constants, comma-separated (e.g. \"ErrNotFound,StatusOK\")")
+	cmd.Flags().StringSliceVar(&varNames, "var", nil, "show references to package-level variables, comma-separated (e.g. \"DefaultClient\")")
+	cmd.Flags().BoolVar(&check, "check", false, "validate arg counts against target module signatures (requires exactly one --func)")
 	return cmd
 }
 
@@ -147,14 +168,15 @@ func runScan(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	// If --check is active, parse the target module's signature.
-	var targetSig *analysis.FuncSignature
-	if funcName != "" && check {
+	// If --check is active, parse signatures for each --func name.
+	targetSigs := make(map[string]*analysis.FuncSignature)
+	if check {
+		if len(funcNames) != 1 {
+			return fmt.Errorf("--check requires exactly one --func value")
+		}
 		targetOwner, targetRepo := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
 		if targetOwner != "" {
 			targetPath := mgr.GetRepoPath(targetRepo)
-			
-			// Try to sync unless offline
 			if !cfg.Offline {
 				if _, statErr := os.Stat(targetPath); statErr != nil {
 					fmt.Printf("Syncing target module for signature check...\n")
@@ -164,21 +186,21 @@ func runScan(_ *cobra.Command, _ []string) error {
 					}
 				}
 			}
-
 			if _, statErr := os.Stat(targetPath); statErr == nil {
-				sig, sigErr := analysis.ParseSignature(targetPath, funcName)
-				if sigErr != nil {
-					fmt.Fprintf(os.Stderr, "  warn: could not parse signature for %q: %v\n", funcName, sigErr)
-				} else {
-					targetSig = sig
-					fmt.Printf("Parsed signature for %q: %d params%s\n\n",
-						funcName, sig.ParamsCount, func() string {
-							if sig.IsVariadic {
-								return "+"
-							}
-							return ""
-						}())
+				for _, name := range funcNames {
+					sig, sigErr := analysis.ParseSignature(targetPath, name)
+					if sigErr != nil {
+						fmt.Fprintf(os.Stderr, "  warn: could not parse signature for %q: %v\n", name, sigErr)
+						continue
+					}
+					targetSigs[name] = sig
+					variadic := ""
+					if sig.IsVariadic {
+						variadic = "+"
+					}
+					fmt.Printf("Parsed signature for %q: %d params%s\n", name, sig.ParamsCount, variadic)
 				}
+				fmt.Println()
 			} else if cfg.Offline {
 				fmt.Fprintf(os.Stderr, "  warn: target module %q not found in cache (%s), cannot check signatures offline\n", targetRepo, targetPath)
 			}
@@ -232,41 +254,120 @@ func runScan(_ *cobra.Command, _ []string) error {
 
 		// Function call-site search.
 		var callSites []callSiteResult
-		if funcName != "" && usesTarget {
-			sites, warnings, scanErr := analysis.ScanCallSites(repoPath, cfg.TargetModule, funcName)
-			if scanErr != nil {
-				fmt.Fprintf(os.Stderr, "  warn: scan call sites for %s: %v\n", r.Name, scanErr)
+		if len(funcNames) > 0 && usesTarget {
+			for _, name := range funcNames {
+				sites, warnings, scanErr := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, name)
+				if scanErr != nil {
+					fmt.Fprintf(os.Stderr, "  warn: scan call sites for %s: %v\n", r.Name, scanErr)
+				}
+				for _, w := range warnings {
+					fmt.Fprintf(os.Stderr, "  warn: %s: %s\n", r.Name, w)
+				}
+				for _, s := range sites {
+					callSites = append(callSites, callSiteResult{
+						SearchedFor: name,
+						File:        s.File,
+						Line:        s.Line,
+						Column:      s.Column,
+						FuncName:    s.FuncName,
+						RawName:     s.RawName,
+						ArgCount:    s.ArgCount,
+					})
+				}
 			}
-			for _, w := range warnings {
-				fmt.Fprintf(os.Stderr, "  warn: %s: %s\n", r.Name, w)
-			}
-			for _, s := range sites {
-				callSites = append(callSites, callSiteResult{
-					File:     s.File,
-					Line:     s.Line,
-					Column:   s.Column,
-					FuncName: s.FuncName,
-					RawName:  s.RawName,
-					ArgCount: s.ArgCount,
-				})
+		}
+
+		// Method call-site search.
+		var methodSites []callSiteResult
+		if len(methodNames) > 0 && usesTarget {
+			for _, name := range methodNames {
+				sites, warnings, scanErr := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, name)
+				if scanErr != nil {
+					fmt.Fprintf(os.Stderr, "  warn: scan method sites for %s: %v\n", r.Name, scanErr)
+				}
+				for _, w := range warnings {
+					fmt.Fprintf(os.Stderr, "  warn: %s: %s\n", r.Name, w)
+				}
+				for _, s := range sites {
+					methodSites = append(methodSites, callSiteResult{
+						SearchedFor: name,
+						File:        s.File,
+						Line:        s.Line,
+						Column:      s.Column,
+						FuncName:    s.FuncName,
+						RawName:     s.RawName,
+						ArgCount:    s.ArgCount,
+					})
+				}
 			}
 		}
 
 		// Type/interface reference search.
 		var typeRefs []typeRefResult
-		if typeName != "" && usesTarget {
-			refs, scanErr := analysis.ScanTypeReferences(repoPath, cfg.TargetModule, typeName)
-			if scanErr != nil {
-				fmt.Fprintf(os.Stderr, "  warn: scan type refs for %s: %v\n", r.Name, scanErr)
+		if len(typeNames) > 0 && usesTarget {
+			for _, name := range typeNames {
+				refs, scanErr := analysis.ScanTypeReferences(repoPath, cfg.TargetModule, name)
+				if scanErr != nil {
+					fmt.Fprintf(os.Stderr, "  warn: scan type refs for %s: %v\n", r.Name, scanErr)
+				}
+				for _, ref := range refs {
+					typeRefs = append(typeRefs, typeRefResult{
+						SearchedFor: name,
+						File:        ref.File,
+						Line:        ref.Line,
+						TypeName:    ref.TypeName,
+						RawName:     ref.RawName,
+						Context:     ref.Context,
+					})
+				}
 			}
-			for _, ref := range refs {
-				typeRefs = append(typeRefs, typeRefResult{
-					File:     ref.File,
-					Line:     ref.Line,
-					TypeName: ref.TypeName,
-					RawName:  ref.RawName,
-					Context:  ref.Context,
-				})
+		}
+
+		// Const reference search.
+		var constRefs []symbolRefResult
+		if len(constNames) > 0 && usesTarget {
+			for _, name := range constNames {
+				sites, warnings, scanErr := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, name)
+				if scanErr != nil {
+					fmt.Fprintf(os.Stderr, "  warn: scan const refs for %s: %v\n", r.Name, scanErr)
+				}
+				for _, w := range warnings {
+					fmt.Fprintf(os.Stderr, "  warn: %s: %s\n", r.Name, w)
+				}
+				for _, s := range sites {
+					constRefs = append(constRefs, symbolRefResult{
+						SearchedFor: name,
+						File:        s.File,
+						Line:        s.Line,
+						Column:      s.Column,
+						Name:        s.FuncName,
+						RawName:     s.RawName,
+					})
+				}
+			}
+		}
+
+		// Var reference search.
+		var varRefs []symbolRefResult
+		if len(varNames) > 0 && usesTarget {
+			for _, name := range varNames {
+				sites, warnings, scanErr := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, name)
+				if scanErr != nil {
+					fmt.Fprintf(os.Stderr, "  warn: scan var refs for %s: %v\n", r.Name, scanErr)
+				}
+				for _, w := range warnings {
+					fmt.Fprintf(os.Stderr, "  warn: %s: %s\n", r.Name, w)
+				}
+				for _, s := range sites {
+					varRefs = append(varRefs, symbolRefResult{
+						SearchedFor: name,
+						File:        s.File,
+						Line:        s.Line,
+						Column:      s.Column,
+						Name:        s.FuncName,
+						RawName:     s.RawName,
+					})
+				}
 			}
 		}
 
@@ -277,7 +378,10 @@ func runScan(_ *cobra.Command, _ []string) error {
 			UsesTarget:    usesTarget,
 			Packages:      pkgs,
 			CallSites:     callSites,
+			MethodSites:   methodSites,
 			TypeRefs:      typeRefs,
+			ConstRefs:     constRefs,
+			VarRefs:       varRefs,
 			TargetVersion: targetVersion,
 			CommitHash:    commitHash,
 			LatestHash:    shortenHash(latestTargetHash),
@@ -322,17 +426,27 @@ func runScan(_ *cobra.Command, _ []string) error {
 	sortResults(results)
 
 	if format == "json" {
-		return json.NewEncoder(os.Stdout).Encode(scanOutput{
-			Repos:           results,
-			TargetModule:    cfg.TargetModule,
-			Branch:          branch,
-			FuncName:        funcName,
-			TypeName:        typeName,
-			TargetSignature: targetSig,
-			Total:           len(results),
-			GoModCount:      goModCount,
-			TargetCount:     targetCount,
-		})
+		sigs := make(map[string]int)
+		for name, sig := range targetSigs {
+			sigs[name] = sig.ParamsCount
+		}
+		out := scanOutput{
+			Repos:        results,
+			TargetModule: cfg.TargetModule,
+			Branch:       branch,
+			FuncNames:    funcNames,
+			MethodNames:  methodNames,
+			TypeNames:    typeNames,
+			ConstNames:   constNames,
+			VarNames:     varNames,
+			Total:        len(results),
+			GoModCount:   goModCount,
+			TargetCount:  targetCount,
+		}
+		if len(sigs) > 0 {
+			out.Signatures = sigs
+		}
+		return json.NewEncoder(os.Stdout).Encode(out)
 	}
 
 	// Table output.
@@ -387,72 +501,30 @@ func runScan(_ *cobra.Command, _ []string) error {
 	}
 
 	// Show function call sites when --func is active.
-	if funcName != "" {
-		fmt.Printf("\nCall sites for %q:\n", funcName)
-		if targetCount == 0 {
-			fmt.Printf("  (no repos use target module %s)\n", cfg.TargetModule)
-		} else {
-			totalSites := 0
-			reposWithSites := 0
-			for _, r := range results {
-				if len(r.CallSites) == 0 {
-					continue
-				}
-				reposWithSites++
-				totalSites += len(r.CallSites)
-				fmt.Printf("\n  %s%s%s (%d call sites):\n", formatter.ColorGreen(), r.Name, formatter.ColorReset(), len(r.CallSites))
-				for _, cs := range r.CallSites {
-					matchStr := ""
-					if targetSig != nil {
-						match := false
-						if targetSig.IsVariadic {
-							match = cs.ArgCount >= targetSig.ParamsCount-1
-						} else {
-							match = cs.ArgCount == targetSig.ParamsCount
-						}
+	for _, name := range funcNames {
+		printCallSites("Call sites", name, targetCount, cfg.TargetModule, results, targetSigs,
+			func(r repoScanResult) []callSiteResult { return r.CallSites })
+	}
 
-						if match {
-							matchStr = fmt.Sprintf("  %s✓ %d args%s", formatter.ColorGreen(), cs.ArgCount, formatter.ColorReset())
-						} else {
-							matchStr = fmt.Sprintf("  %s✗ %d args (expected %d)%s", formatter.ColorRed(), cs.ArgCount, targetSig.ParamsCount, formatter.ColorReset())
-						}
-					}
-					fmt.Printf("    %s:%d  %s%s\n", cs.File, cs.Line, cs.RawName, matchStr)
-				}
-			}
-			if reposWithSites == 0 {
-				fmt.Printf("  (no call sites found in %d repos that use target module)\n", targetCount)
-			} else {
-				fmt.Printf("\n  Total: %d call sites across %d repos\n", totalSites, reposWithSites)
-			}
-		}
+	// Show method call sites when --method is active.
+	for _, name := range methodNames {
+		printCallSites("Method call sites", name, targetCount, cfg.TargetModule, results, nil,
+			func(r repoScanResult) []callSiteResult { return r.MethodSites })
 	}
 
 	// Show type/interface references when --type is active.
-	if typeName != "" {
-		fmt.Printf("\nType references for %q:\n", typeName)
-		if targetCount == 0 {
-			fmt.Printf("  (no repos use target module %s)\n", cfg.TargetModule)
-		} else {
-			totalRefs := 0
-			reposWithRefs := 0
-			for _, r := range results {
-				if len(r.TypeRefs) == 0 {
-					continue
-				}
-				reposWithRefs++
-				totalRefs += len(r.TypeRefs)
-				fmt.Printf("\n  %s%s%s (%d references):\n", formatter.ColorGreen(), r.Name, formatter.ColorReset(), len(r.TypeRefs))
-				for _, ref := range r.TypeRefs {
-					fmt.Printf("    %s:%d  %s\n", ref.File, ref.Line, ref.RawName)
-				}
-			}
-			if reposWithRefs == 0 {
-				fmt.Printf("  (no type references found in %d repos that use target module)\n", targetCount)
-			} else {
-				fmt.Printf("\n  Total: %d references across %d repos\n", totalRefs, reposWithRefs)
-			}
-		}
+	for _, name := range typeNames {
+		printTypeRefs(name, targetCount, cfg.TargetModule, results)
+	}
+
+	// Show const references when --const is active.
+	for _, name := range constNames {
+		printSymbolRefs("Const references", name, targetCount, cfg.TargetModule, results, func(r repoScanResult) []symbolRefResult { return r.ConstRefs })
+	}
+
+	// Show var references when --var is active.
+	for _, name := range varNames {
+		printSymbolRefs("Var references", name, targetCount, cfg.TargetModule, results, func(r repoScanResult) []symbolRefResult { return r.VarRefs })
 	}
 
 	fmt.Printf("\nTarget: %s\n", cfg.TargetModule)
@@ -541,6 +613,114 @@ func matchesAny(name string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+func printCallSites(label, name string, targetCount int, targetModule string, results []repoScanResult, sigs map[string]*analysis.FuncSignature, getSites func(repoScanResult) []callSiteResult) {
+	fmt.Printf("\n%s for %q:\n", label, name)
+	if targetCount == 0 {
+		fmt.Printf("  (no repos use target module %s)\n", targetModule)
+		return
+	}
+	sig := sigs[name]
+	total, reposWithSites := 0, 0
+	for _, r := range results {
+		var matching []callSiteResult
+		for _, cs := range getSites(r) {
+			if cs.SearchedFor == name {
+				matching = append(matching, cs)
+			}
+		}
+		if len(matching) == 0 {
+			continue
+		}
+		reposWithSites++
+		total += len(matching)
+		fmt.Printf("\n  %s%s%s (%d call sites):\n", formatter.ColorGreen(), r.Name, formatter.ColorReset(), len(matching))
+		for _, cs := range matching {
+			matchStr := ""
+			if sig != nil {
+				var match bool
+				if sig.IsVariadic {
+					match = cs.ArgCount >= sig.ParamsCount-1
+				} else {
+					match = cs.ArgCount == sig.ParamsCount
+				}
+				if match {
+					matchStr = fmt.Sprintf("  %s✓ %d args%s", formatter.ColorGreen(), cs.ArgCount, formatter.ColorReset())
+				} else {
+					matchStr = fmt.Sprintf("  %s✗ %d args (expected %d)%s", formatter.ColorRed(), cs.ArgCount, sig.ParamsCount, formatter.ColorReset())
+				}
+			}
+			fmt.Printf("    %s:%d  %s%s\n", cs.File, cs.Line, cs.RawName, matchStr)
+		}
+	}
+	if reposWithSites == 0 {
+		fmt.Printf("  (no call sites found in %d repos that use target module)\n", targetCount)
+	} else {
+		fmt.Printf("\n  Total: %d call sites across %d repos\n", total, reposWithSites)
+	}
+}
+
+func printTypeRefs(name string, targetCount int, targetModule string, results []repoScanResult) {
+	fmt.Printf("\nType references for %q:\n", name)
+	if targetCount == 0 {
+		fmt.Printf("  (no repos use target module %s)\n", targetModule)
+		return
+	}
+	total, reposWithRefs := 0, 0
+	for _, r := range results {
+		var matching []typeRefResult
+		for _, ref := range r.TypeRefs {
+			if ref.SearchedFor == name {
+				matching = append(matching, ref)
+			}
+		}
+		if len(matching) == 0 {
+			continue
+		}
+		reposWithRefs++
+		total += len(matching)
+		fmt.Printf("\n  %s%s%s (%d references):\n", formatter.ColorGreen(), r.Name, formatter.ColorReset(), len(matching))
+		for _, ref := range matching {
+			fmt.Printf("    %s:%d  %s\n", ref.File, ref.Line, ref.RawName)
+		}
+	}
+	if reposWithRefs == 0 {
+		fmt.Printf("  (no type references found in %d repos that use target module)\n", targetCount)
+	} else {
+		fmt.Printf("\n  Total: %d references across %d repos\n", total, reposWithRefs)
+	}
+}
+
+func printSymbolRefs(label, name string, targetCount int, targetModule string, results []repoScanResult, getRefs func(repoScanResult) []symbolRefResult) {
+	fmt.Printf("\n%s for %q:\n", label, name)
+	if targetCount == 0 {
+		fmt.Printf("  (no repos use target module %s)\n", targetModule)
+		return
+	}
+	total, reposWithRefs := 0, 0
+	for _, r := range results {
+		var matching []symbolRefResult
+		for _, ref := range getRefs(r) {
+			if ref.SearchedFor == name {
+				matching = append(matching, ref)
+			}
+		}
+		if len(matching) == 0 {
+			continue
+		}
+		reposWithRefs++
+		total += len(matching)
+		fmt.Printf("\n  %s%s%s (%d references):\n", formatter.ColorGreen(), r.Name, formatter.ColorReset(), len(matching))
+		for _, ref := range matching {
+			fmt.Printf("    %s:%d  %s\n", ref.File, ref.Line, ref.RawName)
+		}
+	}
+	if reposWithRefs == 0 {
+		fmt.Printf("  (no references found in %d repos that use target module)\n", targetCount)
+	} else {
+		fmt.Printf("\n  Total: %d references across %d repos\n", total, reposWithRefs)
+	}
 }
 
 // sortResults sorts scan results by name for deterministic output.

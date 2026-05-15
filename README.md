@@ -143,37 +143,46 @@ depscanner scan --packages
 ### 4. Find call sites of a specific function
 
 ```bash
-depscanner scan --func "util.ProcessData"
+depscanner scan --func "logger.Info"
 ```
 
 **Example Output:**
 
 ```text
   my-cool-app (2 call sites):
-    internal/app/main.go:42            util.ProcessData
-    internal/app/handler.go:18         util.ProcessData
+    internal/app/main.go:42            logger.Info
+    internal/app/handler.go:18         logger.Info
 ```
 
-### 5. Signature mismatch validation
+### 5. Find usages of a specific type or interface
+
+```bash
+depscanner scan --type "Logger"
+# or with package qualifier:
+depscanner scan --type "logger.Logger"
+```
+
+Reports every repository that references the type, with file and line.
+
+### 6. Signature mismatch validation
 
 ```bash
 depscanner scan --func "NewClient" --check
 ```
 
-### 6. Detect API changes (diff)
+### 7. Detect API changes (diff)
 
 Compare the target module's API between two refs:
 
 ```bash
-depscanner diff --from 1.0.0 --to 1.1.0
+depscanner diff 1.0.0 1.1.0
 ```
 
 **Example Output:**
 
 ```text
-
   ✗  REMOVED           core.OldFunction               [BREAKING]
-  ~  LOGIC_CHANGED     util.ProcessData               [LOGIC]
+  ~  LOGIC_CHANGED     logger.Info                    [LOGIC]
   +  ADDED             core.NewFunction               [additive]
 ```
 
@@ -181,50 +190,75 @@ depscanner diff --from 1.0.0 --to 1.1.0
 - `~ LOGIC_CHANGED`: Internal logic change without changing the signature (behavioral change).
 - `+ ADDED`: New symbol added (safe/additive).
 
-### 7. Analyze upgrade impact
+Use `--breaking-only` to filter to breaking changes only:
+
+```bash
+depscanner diff 1.0.0 1.1.0 --breaking-only
+```
+
+### 8. Analyze upgrade impact
 
 Generate a per-repo upgrade checklist based on API changes:
 
 ```bash
-depscanner impact --from abc123 --to main
+depscanner impact abc123 main
 ```
 
 **Example Output:**
 
-````text
+```text
 ✓ RESOLVED my-cool-app (current: ...-2a019f321162)
-  ✓ module/util.ProcessData — 2 call sites: (resolved in 97ce50f14a26)
+  ✓ module/logger.Info — 2 call sites: (resolved in 97ce50f14a26)
 
 ⚠ ACTION REQUIRED data-processor (current: ...-568d8cd5539e)
-  ~ module/util.ProcessData — 5 call sites: (needs commit 97ce50f14a26)
-      internal/worker/job.go:112    util.ProcessData
+  ~ module/logger.Info — 5 call sites: (needs commit 97ce50f14a26)
+      internal/worker/job.go:112    logger.Info
+```
 
-### 8. Diagnostic Mode
+### 9. Diagnostic Mode
 
-If no impacts are found, Depscanner provides a transparent breakdown of what was scanned:
+If no impacts are found, depscanner provides a transparent breakdown of what was scanned:
 
 ```text
 Checked 3 impactful symbols across all reservoirs:
   ~ legacy.API.DeprecatedMethod: 0 call sites
   ~ legacy.NewClient: 0 call sites
   ✓ No consumers are actually affected by these changes.
-````
+```
 
 - **RESOLVED**: Repository is using a version that already contains the fix (verified via git ancestry).
 - **ACTION REQUIRED**: Repository is still using an old version and is affected by the changes. Shows which commit contains the fix.
 
 ## Command Flags
 
-| Flag          | Description                                                            |
-| ------------- | ---------------------------------------------------------------------- |
-| `--config`    | Config file path (default: `~/.depscanner.yaml`)                       |
-| `--cache-dir` | Override local repo cache directory                                    |
-| `--format`    | Output format: `table` (default) or `json`                             |
-| `--no-fetch`  | Skip git fetch, use cached repos only                                  |
-| `--branch`    | Scan a specific branch and enable staleness detection                  |
-| `--packages`  | Show which sub-packages of the target module are imported              |
-| `--func`      | Search for call sites of a function (e.g. `"Must"` or `"helper.Must"`) |
-| `--check`     | Validate call-site arg counts against target signature (with `--func`) |
+### Global (all commands)
+
+| Flag          | Description                                              |
+| ------------- | -------------------------------------------------------- |
+| `--config`    | Config file path (default: `~/.depscanner.yaml`)         |
+| `--cache-dir` | Override local repo cache directory                      |
+| `--format`    | Output format: `table` (default) or `json`               |
+| `--no-fetch`  | Skip git fetch, use cached repos only                    |
+| `--branch`    | Scan repositories on a specific branch                   |
+
+### `scan`
+
+| Flag          | Description                                                                          |
+| ------------- | ------------------------------------------------------------------------------------ |
+| `--packages`  | Show which sub-packages of the target module are imported                               |
+| `--func`      | Find call sites of a function (e.g. `"Info"` or `"logger.Info"`)                       |
+| `--type`      | Find usages of a type or interface (e.g. `"Logger"` or `"logger.Logger"`)               |
+| `--check`     | Validate call-site arg counts against the target module's signature (requires `--func`) |
+
+### `diff <from> <to>`
+
+| Flag              | Description                          |
+| ----------------- | ------------------------------------ |
+| `--breaking-only` | Show only breaking changes           |
+
+### `impact <from> <to>`
+
+No additional flags. `<from>` and `<to>` are git refs (commit hash, tag, or branch name).
 
 ## Output Formats
 

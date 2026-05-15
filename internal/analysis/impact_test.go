@@ -217,11 +217,32 @@ func TestMatchesCallSiteBasic(t *testing.T) {
 			shouldMatch: true,
 		},
 		{
-			name:        "method call on object (heuristic)",
+			name:        "method call on object (heuristic, old-style split)",
 			site:        CallSite{FuncName: "obj.Method"},
 			pkgPath:     "pkg.Receiver",
 			funcName:    "Method",
 			shouldMatch: true,
+		},
+		{
+			name:        "method call with module path (new-style split)",
+			site:        CallSite{FuncName: "github.com/org/lib/svc.Do"},
+			pkgPath:     "github.com/org/lib/svc",
+			funcName:    "Client.Do",
+			shouldMatch: true,
+		},
+		{
+			name:        "method name match but wrong package",
+			site:        CallSite{FuncName: "github.com/other/pkg.Do"},
+			pkgPath:     "github.com/org/lib/svc",
+			funcName:    "Client.Do",
+			shouldMatch: false,
+		},
+		{
+			name:        "heuristic does not fire for plain func target",
+			site:        CallSite{FuncName: "obj.Func"},
+			pkgPath:     "github.com/org/lib/pkg",
+			funcName:    "Func",
+			shouldMatch: false,
 		},
 	}
 
@@ -237,9 +258,9 @@ func TestMatchesCallSiteBasic(t *testing.T) {
 
 func TestSplitSymbolKey(t *testing.T) {
 	tests := []struct {
-		key       string
-		wantPkg   string
-		wantName  string
+		key      string
+		wantPkg  string
+		wantName string
 	}{
 		{
 			key:      "pkg.Func",
@@ -260,6 +281,22 @@ func TestSplitSymbolKey(t *testing.T) {
 			key:      "",
 			wantPkg:  "",
 			wantName: "",
+		},
+		// Module-path keys: split at first "." after last "/"
+		{
+			key:      "github.com/org/lib/svc.Client.Do",
+			wantPkg:  "github.com/org/lib/svc",
+			wantName: "Client.Do",
+		},
+		{
+			key:      "github.com/org/lib/helper.ProcessData",
+			wantPkg:  "github.com/org/lib/helper",
+			wantName: "ProcessData",
+		},
+		{
+			key:      "gitea.example.com/org/shared-lib/service.SchedulerService",
+			wantPkg:  "gitea.example.com/org/shared-lib/service",
+			wantName: "SchedulerService",
 		},
 	}
 

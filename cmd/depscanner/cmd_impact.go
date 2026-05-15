@@ -86,25 +86,27 @@ func runImpact(cmd *cobra.Command, args []string) error {
 
 	changes := analysis.DiffSymbols(oldIndex, newIndex)
 	var interesting []analysis.SymbolChange
-	var funcTargets []string
-	var typeTargets []string
+	var symbolTargets []string // func, method, const, var — scanned via ScanCallSites
+	var typeTargets []string   // struct, interface, type — scanned via ScanTypeReferences
 	symbolIntroCommits := make(map[string]string)
 
 	for _, c := range changes {
 		if c.Breaking || c.Kind == analysis.ChangeLogic || c.Kind == analysis.ChangeAffected {
 			switch c.Category {
-			case analysis.KindFunc, analysis.KindMethod:
+			case analysis.KindFunc, analysis.KindMethod, analysis.KindConst, analysis.KindVar:
 				interesting = append(interesting, c)
 
-				dotIdx := strings.LastIndex(c.Symbol, ".")
-				if dotIdx != -1 {
-					fullPkg := c.Symbol[:dotIdx]
-					funcName := c.Symbol[dotIdx+1:]
+				fullPkg, symName := analysis.SplitSymbolKey(c.Symbol)
+				if symName != "" {
 					relPkg := ""
 					if fullPkg != cfg.TargetModule {
 						relPkg = strings.TrimPrefix(fullPkg, cfg.TargetModule+"/")
 					}
-					funcTargets = append(funcTargets, relPkg+"."+funcName)
+					target := symName
+					if relPkg != "" {
+						target = relPkg + "." + symName
+					}
+					symbolTargets = append(symbolTargets, target)
 
 					for _, sym := range newIndex {
 						if sym.QualifiedName() == c.Symbol {
@@ -129,7 +131,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		fmt.Printf("\nNo impactful changes detected.\n")
 		return nil
 	}
-	fmt.Printf("  Found %d impactful changes (%d funcs, %d types)\n\n", len(interesting), len(funcTargets), len(typeTargets))
+	fmt.Printf("  Found %d impactful changes (%d symbols, %d types)\n\n", len(interesting), len(symbolTargets), len(typeTargets))
 
 	// Phase 2: Concurrent Scan
 	var repos []gitea.Repository
@@ -175,8 +177,8 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		}
 
 		var allSites []analysis.CallSite
-		for _, target := range funcTargets {
-			sites, _, _ := analysis.ScanCallSites(repoPath, cfg.TargetModule, target)
+		for _, target := range symbolTargets {
+			sites, _, _ := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, target)
 			allSites = append(allSites, sites...)
 		}
 
@@ -251,7 +253,13 @@ func printImpactReport(targetRepoPath string, impacts []analysis.RepoImpact, cha
 			} else if c.Kind == analysis.ChangeLogic {
 				icon = formatter.ColorYellow() + "~" + formatter.ColorReset()
 			}
-			fmt.Printf("  %s %s: 0 call sites\n", icon, c.Symbol)
+			label := "call sites"
+			if c.Category == analysis.KindConst || c.Category == analysis.KindVar {
+				label = "references"
+			} else if c.Category == analysis.KindStruct || c.Category == analysis.KindInterface || c.Category == analysis.KindType {
+				label = "type refs"
+			}
+			fmt.Printf("  %s %s: 0 %s\n", icon, c.Symbol, label)
 		}
 		formatter.Printf("\n  %s✓ No consumers are affected by these changes.%s\n\n", formatter.ColorGreen(), formatter.ColorReset())
 		return nil
@@ -291,7 +299,11 @@ func printImpactReport(targetRepoPath string, impacts []analysis.RepoImpact, cha
 				icon = formatter.ColorGreen() + "✓" + formatter.ColorReset()
 			}
 
-			formatter.Printf("  %s %s — %d call sites:", icon, imp.Change.Symbol, len(imp.Sites))
+			siteLabel := "call sites"
+			if imp.Change.Category == analysis.KindConst || imp.Change.Category == analysis.KindVar {
+				siteLabel = "references"
+			}
+			formatter.Printf("  %s %s — %d %s:", icon, imp.Change.Symbol, len(imp.Sites), siteLabel)
 			if symbolIsResolved {
 				formatter.Printf(" %s(resolved in %s)%s", formatter.ColorGreen(), shortenHash(intro), formatter.ColorReset())
 			} else if intro != "" {

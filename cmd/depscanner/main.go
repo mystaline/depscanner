@@ -20,9 +20,12 @@ var (
 	noFetch  bool
 	branch   string
 	packages bool
-	funcName string
-	typeName string
-	check    bool
+	funcNames   []string
+	methodNames []string
+	typeNames   []string
+	constNames  []string
+	varNames    []string
+	check       bool
 
 	rootCmd = &cobra.Command{
 		Use:     "depscanner",

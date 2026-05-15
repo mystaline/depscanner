@@ -106,9 +106,9 @@ func AnalyzeImpact(changes []SymbolChange, repoCallSites map[string][]CallSite) 
 // found in consumer repos. Used alongside AnalyzeImpact for full change coverage.
 func AnalyzeTypeImpact(changes []SymbolChange, repoTypeRefs map[string][]TypeRef) []RepoImpact {
 	type matchTarget struct {
-		pkg     string
-		name    string
-		change  SymbolChange
+		pkg    string
+		name   string
+		change SymbolChange
 	}
 	var targets []matchTarget
 	for _, c := range changes {
@@ -181,7 +181,22 @@ func AnalyzeTypeImpact(changes []SymbolChange, repoTypeRefs map[string][]TypeRef
 	return result
 }
 
+// splitSymbolKey splits a symbol key into package path and symbol name.
+// For module-path keys (contain "/"), splits at the first "." after the last "/",
+// correctly handling method symbols like "github.com/org/lib/svc.Client.Do"
+// -> pkg="github.com/org/lib/svc", name="Client.Do".
+// For short keys without "/", falls back to LastIndex to preserve "pkg.Name" behavior.
 func splitSymbolKey(key string) (pkg, name string) {
+	slashIdx := strings.LastIndex(key, "/")
+	if slashIdx != -1 {
+		afterSlash := key[slashIdx+1:]
+		dotIdx := strings.Index(afterSlash, ".")
+		if dotIdx == -1 {
+			return key, ""
+		}
+		split := slashIdx + 1 + dotIdx
+		return key[:split], key[split+1:]
+	}
 	dotIdx := strings.LastIndex(key, ".")
 	if dotIdx != -1 {
 		return key[:dotIdx], key[dotIdx+1:]
@@ -189,30 +204,50 @@ func splitSymbolKey(key string) (pkg, name string) {
 	return "", key
 }
 
-func matchesCallSite(site CallSite, pkgPath, funcName string) bool {
+// SplitSymbolKey is the exported version of splitSymbolKey.
+func SplitSymbolKey(key string) (pkg, name string) {
+	return splitSymbolKey(key)
+}
+
+func matchesCallSite(site CallSite, pkgPath, symbolName string) bool {
 	dotIdx := strings.LastIndex(site.FuncName, ".")
 	if dotIdx == -1 {
 		return false
 	}
 	sitePkg := site.FuncName[:dotIdx]
 	siteFuncName := site.FuncName[dotIdx+1:]
-	
-	if siteFuncName != funcName {
+
+	// For method symbols like "Client.Do", match against just the method name.
+	targetName := symbolName
+	if idx := strings.LastIndex(symbolName, "."); idx != -1 {
+		targetName = symbolName[idx+1:]
+	}
+
+	if siteFuncName != targetName {
 		return false
 	}
 
-	if pkgPath != "" {
-		if sitePkg == pkgPath {
-			return true
-		}
-		// Method support: if sitePkg is just an object name (no slashes), 
-		// and pkgPath is Package.Receiver
-		if strings.Contains(pkgPath, ".") && !strings.Contains(sitePkg, "/") {
-			return true
-		}
+	if pkgPath == "" {
+		return true
+	}
+
+	// Exact package match — works for both short "pkg" and full module paths.
+	if sitePkg == pkgPath {
+		return true
+	}
+
+	// For module-path targets (pkgPath contains "/"), require exact match only.
+	// A non-matching sitePkg means a different package; no heuristic fallback.
+	if strings.Contains(pkgPath, "/") {
 		return false
 	}
-	return true
+
+	// For short-key targets (no "/" in pkgPath): receiver-qualified heuristic.
+	// Only match if the target is a method: symbolName="Client.Do" or
+	// pkgPath="pkg.Receiver" (old-style split for non-module keys).
+	isMethodTarget := strings.Contains(symbolName, ".") ||
+		(strings.Contains(pkgPath, ".") && !strings.Contains(pkgPath, "/"))
+	return isMethodTarget
 }
 
 func CountTotalImpactedSites(impacts []RepoImpact) int {
