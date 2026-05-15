@@ -133,10 +133,11 @@ func ScanSymbolReferences(repoDir, targetModule, symbolName string) ([]CallSite,
 		return nil, nil, nil
 	}
 
-	// Pass 1b: build DI field index from all target-module importers.
-	// Uses allAliases (not the qualPkg-filtered aliases) so type qualifiers like
-	// "SchedulerService.Schedule" find fields whose type lives in package "service".
-	diFieldIndex := make(map[string][]diFieldEntry) // fieldName → entries
+	// Pass 1b: build DI index from all target-module importers.
+	// Covers both struct fields (obj.field.method) and function parameters (param.method).
+	// Uses allAliases so type qualifiers like "SchedulerService.Schedule" find names whose
+	// type lives in package "service" regardless of the qualPkg filter.
+	diFieldIndex := make(map[string][]diFieldEntry) // name → entries (fields + params)
 	fsetDI := token.NewFileSet()
 	for _, c := range diCandidates {
 		f, parseErr := parser.ParseFile(fsetDI, c.path, nil, 0)
@@ -144,6 +145,7 @@ func ScanSymbolReferences(repoDir, targetModule, symbolName string) ([]CallSite,
 			continue
 		}
 		extractDIFields(f, c.aliasMap, diFieldIndex)
+		extractFuncParams(f, c.aliasMap, diFieldIndex)
 	}
 
 	// Pass 2: full AST parse on candidate files (qualPkg-filtered), find direct CallExpr.
@@ -226,9 +228,10 @@ func ScanSymbolReferences(repoDir, targetModule, symbolName string) ([]CallSite,
 
 		walk(f, false)
 
-		// Also scan this candidate for DI calls (obj.field.method where field is from target module).
+		// Also scan this candidate for DI calls (obj.field.method) and param calls (param.method).
 		if len(diFieldIndex) > 0 {
 			sites = append(sites, scanDICallSites(f, fset2, repoDir, diFieldIndex, plainFunc, qualPkg)...)
+			sites = append(sites, scanParamCallSites(f, fset2, repoDir, diFieldIndex, plainFunc, qualPkg)...)
 		}
 	}
 
@@ -251,6 +254,7 @@ func ScanSymbolReferences(repoDir, targetModule, symbolName string) ([]CallSite,
 				return nil
 			}
 			sites = append(sites, scanDICallSites(f, fset3, repoDir, diFieldIndex, plainFunc, qualPkg)...)
+			sites = append(sites, scanParamCallSites(f, fset3, repoDir, diFieldIndex, plainFunc, qualPkg)...)
 			return nil
 		}); walkErr != nil {
 			parseWarnings = append(parseWarnings, fmt.Sprintf("pass3 walk: %v", walkErr))
@@ -370,6 +374,80 @@ func addDIFieldEntry(field *ast.Field, aliasMap map[string]string, index map[str
 			index[nameIdent.Name] = append(existing, entry)
 		}
 	}
+}
+
+// extractFuncParams scans function declarations for parameters typed from the target module
+// and adds them to the shared index. This enables detection of param.method() calls
+// (single-level selectors) in addition to the struct-field obj.field.method() pattern.
+func extractFuncParams(f *ast.File, aliasMap map[string]string, index map[string][]diFieldEntry) {
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok {
+			return true
+		}
+		if fn.Type.Params == nil {
+			return true
+		}
+		for _, field := range fn.Type.Params.List {
+			if field.Type == nil || len(field.Names) == 0 {
+				continue
+			}
+			addDIFieldEntry(field, aliasMap, index)
+		}
+		return true
+	})
+}
+
+// scanParamCallSites walks a file looking for single-level selector calls param.method(...)
+// where param is a known name (struct field or function parameter) from the target module.
+// Complements scanDICallSites which handles the two-level obj.field.method() pattern.
+func scanParamCallSites(f *ast.File, fset *token.FileSet, repoDir string, index map[string][]diFieldEntry, methodName, typeQualifier string) []CallSite {
+	var sites []CallSite
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if sel.Sel.Name != methodName {
+			return true
+		}
+		// Must be a plain Ident (single-level). Chained selectors are handled by scanDICallSites.
+		ident, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		entries, exists := index[ident.Name]
+		if !exists {
+			return true
+		}
+		for _, entry := range entries {
+			if typeQualifier != "" && !matchesDIQualifier(entry, typeQualifier) {
+				continue
+			}
+			pos := fset.Position(call.Pos())
+			relPath, relErr := filepath.Rel(repoDir, pos.Filename)
+			if relErr != nil {
+				relPath = pos.Filename
+			}
+			sites = append(sites, CallSite{
+				File:         filepath.ToSlash(relPath),
+				Line:         pos.Line,
+				Column:       pos.Column,
+				FuncName:     entry.importPath + "." + methodName,
+				RawName:      ident.Name + "." + methodName,
+				ArgCount:     len(call.Args),
+				ViaField:     ident.Name,
+				ViaFieldType: entry.importPath + "." + entry.typeName,
+			})
+			break
+		}
+		return true
+	})
+	return sites
 }
 
 // scanDICallSites walks a file looking for chained selector calls of the form obj.field.method(...)

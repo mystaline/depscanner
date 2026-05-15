@@ -420,26 +420,47 @@ func (u *TxUsecase) Execute() {
 	assertHasDI(t, renderSites, "TemplateService", "Render")
 }
 
-// TestDINoFalsePositiveLocalVar: a method call on a local variable should NOT be
-// detected as a DI call (no struct field involved).
-func TestDINoFalsePositiveLocalVar(t *testing.T) {
+// TestParamCallDetected: method call on a function parameter typed from target module is detected.
+func TestParamCallDetected(t *testing.T) {
 	dir := t.TempDir()
 	const module = "example.com/org/lib"
-	// This file imports target module and has a local var call, not a field call.
 	writeTempFile(t, dir, "handler.go", `package handler
 
 import svc "example.com/org/lib/service"
 
 func Process(agenda svc.SchedulerService) {
-	agenda.Schedule("job", nil, nil) // local param, not a struct field
+	agenda.Schedule("job", nil, nil)
 }
 `)
 	sites := mustScan(t, dir, module, "Schedule")
-	// agenda.Schedule is a direct call (single-level selector), handled by existing logic.
-	// It should NOT appear as a DI call (ViaField should be empty for that site).
+	assertSiteCount(t, sites, 1, "param call Schedule")
+	assertHasDI(t, sites, "agenda", "Schedule")
+	if sites[0].ViaFieldType != "example.com/org/lib/service.SchedulerService" {
+		t.Errorf("ViaFieldType = %q", sites[0].ViaFieldType)
+	}
+}
+
+// TestDINoFalsePositiveLocalVar: a method call on a local variable NOT typed from
+// the target module should not be detected.
+func TestDINoFalsePositiveLocalVar(t *testing.T) {
+	dir := t.TempDir()
+	const module = "example.com/org/lib"
+	writeTempFile(t, dir, "handler.go", `package handler
+
+import svc "example.com/org/lib/service"
+
+type LocalType struct{}
+func (l *LocalType) Schedule(name string) {}
+
+func Process(real svc.SchedulerService) {
+	var local LocalType
+	local.Schedule("job") // local var, type NOT from target module — should not match
+}
+`)
+	sites := mustScan(t, dir, module, "Schedule")
 	for _, s := range sites {
-		if s.ViaField != "" {
-			t.Errorf("expected ViaField=\"\" for local var call, got %q", s.ViaField)
+		if s.ViaField == "local" {
+			t.Errorf("false positive: local var (non-target type) was detected as DI")
 		}
 	}
 }
