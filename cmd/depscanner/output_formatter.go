@@ -1,31 +1,38 @@
 package main
 
 import (
+	"fmt"
 	"io"
 )
 
-
-// OutputFormatter provides platform-specific output formatting (colors on Unix, plain on Windows).
+// OutputFormatter provides color-aware output formatting.
+// ANSI codes work on all platforms — Windows support is enabled via init_windows.go.
 type OutputFormatter interface {
-	// ColorGreen returns green colored text (or plain on Windows)
 	ColorGreen() string
-	// ColorRed returns red colored text (or plain on Windows)
 	ColorRed() string
-	// ColorYellow returns yellow colored text (or plain on Windows)
 	ColorYellow() string
-	// ColorReset returns reset code (or empty on Windows)
-	ColorReset() string
-	// ColorBlue returns blue colored text (or plain on Windows)
 	ColorBlue() string
-	// ColorBold returns bold code (or empty on Windows)
 	ColorBold() string
-	// Printf prints formatted text to stdout
+	ColorReset() string
 	Printf(format string, v ...interface{})
-	// Fprintf prints formatted text to writer
 	Fprintf(w io.Writer, format string, v ...interface{})
-	// Fprintln prints formatted text to writer with newline
 	Fprintln(w io.Writer, v ...interface{})
-	// Println prints text with newline
 	Println(v ...interface{})
 }
+
+type ansiFormatter struct{}
+
+func NewOutputFormatter() OutputFormatter { return &ansiFormatter{} }
+
+func (f *ansiFormatter) ColorGreen() string  { return "\033[32m" }
+func (f *ansiFormatter) ColorRed() string    { return "\033[31m" }
+func (f *ansiFormatter) ColorYellow() string { return "\033[33m" }
+func (f *ansiFormatter) ColorBlue() string   { return "\033[34m" }
+func (f *ansiFormatter) ColorBold() string   { return "\033[1m" }
+func (f *ansiFormatter) ColorReset() string  { return "\033[0m" }
+
+func (f *ansiFormatter) Printf(format string, v ...interface{})               { fmt.Printf(format, v...) }
+func (f *ansiFormatter) Fprintf(w io.Writer, format string, v ...interface{}) { fmt.Fprintf(w, format, v...) }
+func (f *ansiFormatter) Fprintln(w io.Writer, v ...interface{})               { fmt.Fprintln(w, v...) }
+func (f *ansiFormatter) Println(v ...interface{})                              { fmt.Println(v...) }
 
