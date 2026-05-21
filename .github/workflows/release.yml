@@ -66,7 +66,7 @@ jobs:
           zip depscanner-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}.zip \
             depscanner${{ matrix.ext }} README.md
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: depscanner-${{ matrix.os }}-${{ matrix.arch }}
           path: depscanner-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}.${{ matrix.pkg }}
