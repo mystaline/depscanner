@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/mystaline/depscanner/internal/config"
-	"github.com/mystaline/depscanner/internal/repo"
 	"github.com/spf13/cobra"
 )
 
@@ -32,51 +31,69 @@ Next sync without --no-fetch will re-shallow automatically.`,
 				cfg.CacheDir = cacheDir
 			}
 
-			mgr := repo.NewManager(cfg.CacheDir, cfg.Gitea.Org)
-			orgPath := mgr.GetOrgPath()
-
 			if len(args) == 1 {
-				return unshallowOne(orgPath, args[0])
+				return unshallowFind(cfg.CacheDir, args[0])
 			}
-			return unshallowAll(orgPath)
+			return unshallowAllOrgs(cfg.CacheDir)
 		},
 	}
 }
 
-func unshallowOne(orgPath, name string) error {
-	repoPath := filepath.Join(orgPath, name)
-	if _, err := os.Stat(filepath.Join(repoPath, ".git")); os.IsNotExist(err) {
-		return fmt.Errorf("repo %q not found in cache", name)
+// unshallowFind searches all org subdirs under cacheDir for a repo by name.
+func unshallowFind(cacheDir, name string) error {
+	orgs, err := os.ReadDir(cacheDir)
+	if err != nil {
+		return fmt.Errorf("read cache dir: %w", err)
 	}
-	fmt.Printf("unshallowing %s... ", name)
-	unshallowTargetRepo(repoPath)
-	fmt.Println("done")
-	return nil
+	for _, org := range orgs {
+		if !org.IsDir() || strings.HasPrefix(org.Name(), ".") {
+			continue
+		}
+		repoPath := filepath.Join(cacheDir, org.Name(), name)
+		if _, err := os.Stat(filepath.Join(repoPath, ".git")); err == nil {
+			fmt.Printf("unshallowing %s/%s... ", org.Name(), name)
+			unshallowTargetRepo(repoPath)
+			fmt.Println("done")
+			return nil
+		}
+	}
+	return fmt.Errorf("repo %q not found in cache under %s", name, cacheDir)
 }
 
-func unshallowAll(orgPath string) error {
-	entries, err := os.ReadDir(orgPath)
+// unshallowAllOrgs unshallows every repo across all org subdirs under cacheDir.
+func unshallowAllOrgs(cacheDir string) error {
+	orgs, err := os.ReadDir(cacheDir)
 	if err != nil {
 		return fmt.Errorf("read cache dir: %w", err)
 	}
 
-	var repos []string
-	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
-			repos = append(repos, e.Name())
+	found := false
+	for _, org := range orgs {
+		if !org.IsDir() || strings.HasPrefix(org.Name(), ".") {
+			continue
+		}
+		orgPath := filepath.Join(cacheDir, org.Name())
+		repos, err := os.ReadDir(orgPath)
+		if err != nil {
+			continue
+		}
+		for _, r := range repos {
+			if !r.IsDir() || strings.HasPrefix(r.Name(), ".") {
+				continue
+			}
+			repoPath := filepath.Join(orgPath, r.Name())
+			if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
+				continue
+			}
+			found = true
+			fmt.Printf("unshallowing %-50s ", org.Name()+"/"+r.Name())
+			unshallowTargetRepo(repoPath)
+			fmt.Println("done")
 		}
 	}
 
-	if len(repos) == 0 {
+	if !found {
 		fmt.Println("no repos in cache")
-		return nil
-	}
-
-	for _, name := range repos {
-		repoPath := filepath.Join(orgPath, name)
-		fmt.Printf("unshallowing %-40s ", name)
-		unshallowTargetRepo(repoPath)
-		fmt.Println("done")
 	}
 	return nil
 }
