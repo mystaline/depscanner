@@ -535,11 +535,13 @@ func runScan(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	fmt.Printf("\nTarget: %s\n", cfg.TargetModule)
-	if branch != "" {
-		fmt.Printf("Branch: %s -> %s@%s (latest: %s)\n", branch, cfg.TargetModule, targetBranch, shortenHash(latestTargetHash))
+	if format != "json" {
+		fmt.Printf("\nTarget: %s\n", cfg.TargetModule)
+		if branch != "" {
+			fmt.Printf("Branch: %s -> %s@%s (latest: %s)\n", branch, cfg.TargetModule, targetBranch, shortenHash(latestTargetHash))
+		}
+		fmt.Printf("Summary: %d/%d Go repos depend on target module\n", totalTarget, totalGoMod)
 	}
-	fmt.Printf("Summary: %d/%d Go repos depend on target module\n", totalTarget, totalGoMod)
 	return nil
 }
 
