@@ -252,3 +252,131 @@ func TestGetBranchForRepo(t *testing.T) {
 		})
 	}
 }
+
+
+func TestActiveOrgs_MultiOrg(t *testing.T) {
+	cfg := &Config{
+		Gitea: GiteaConfig{
+			URL:   "https://gitea.example.com",
+			Token: "tok",
+			Orgs: []OrgConfig{
+				{Name: "org-a", IncludeRepos: []string{"svc-1"}},
+				{Name: "org-b", ExcludeRepos: []string{"old"}},
+			},
+		},
+	}
+	orgs := cfg.ActiveOrgs()
+	if len(orgs) != 2 {
+		t.Fatalf("ActiveOrgs() len = %d, want 2", len(orgs))
+	}
+	if orgs[0].Name != "org-a" {
+		t.Errorf("orgs[0].Name = %q, want \"org-a\"", orgs[0].Name)
+	}
+	if len(orgs[0].IncludeRepos) != 1 || orgs[0].IncludeRepos[0] != "svc-1" {
+		t.Errorf("orgs[0].IncludeRepos = %v, want [svc-1]", orgs[0].IncludeRepos)
+	}
+	if orgs[1].Name != "org-b" {
+		t.Errorf("orgs[1].Name = %q, want \"org-b\"", orgs[1].Name)
+	}
+}
+
+func TestActiveOrgs_SingleOrgFallback(t *testing.T) {
+	cfg := &Config{
+		Gitea:        GiteaConfig{Org: "legacy-org"},
+		IncludeRepos: []string{"svc-a"},
+		ExcludeRepos: []string{"old"},
+	}
+	orgs := cfg.ActiveOrgs()
+	if len(orgs) != 1 {
+		t.Fatalf("ActiveOrgs() len = %d, want 1", len(orgs))
+	}
+	if orgs[0].Name != "legacy-org" {
+		t.Errorf("orgs[0].Name = %q, want \"legacy-org\"", orgs[0].Name)
+	}
+	if len(orgs[0].IncludeRepos) != 1 || orgs[0].IncludeRepos[0] != "svc-a" {
+		t.Errorf("orgs[0].IncludeRepos = %v, want [svc-a]", orgs[0].IncludeRepos)
+	}
+	if len(orgs[0].ExcludeRepos) != 1 || orgs[0].ExcludeRepos[0] != "old" {
+		t.Errorf("orgs[0].ExcludeRepos = %v, want [old]", orgs[0].ExcludeRepos)
+	}
+}
+
+func TestActiveOrgs_EmptyReturnsNil(t *testing.T) {
+	cfg := &Config{}
+	orgs := cfg.ActiveOrgs()
+	if orgs != nil {
+		t.Errorf("ActiveOrgs() with no org set = %v, want nil", orgs)
+	}
+}
+
+func TestLoadMultiOrgConfig(t *testing.T) {
+	configContent := `gitea:
+  url: "https://gitea.example.com"
+  token: "tok"
+  orgs:
+    - name: org-a
+      include_repos:
+        - svc-1
+    - name: org-b
+      exclude_repos:
+        - old
+
+target_module: "gitea.example.com/lib/utils"
+`
+	tmpdir := t.TempDir()
+	configPath := filepath.Join(tmpdir, "depscanner.yaml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if len(cfg.Gitea.Orgs) != 2 {
+		t.Fatalf("Gitea.Orgs len = %d, want 2", len(cfg.Gitea.Orgs))
+	}
+	if cfg.Gitea.Orgs[0].Name != "org-a" {
+		t.Errorf("Orgs[0].Name = %q, want \"org-a\"", cfg.Gitea.Orgs[0].Name)
+	}
+	if len(cfg.Gitea.Orgs[0].IncludeRepos) != 1 || cfg.Gitea.Orgs[0].IncludeRepos[0] != "svc-1" {
+		t.Errorf("Orgs[0].IncludeRepos = %v, want [svc-1]", cfg.Gitea.Orgs[0].IncludeRepos)
+	}
+	if cfg.Gitea.Orgs[1].Name != "org-b" {
+		t.Errorf("Orgs[1].Name = %q, want \"org-b\"", cfg.Gitea.Orgs[1].Name)
+	}
+	if len(cfg.Gitea.Orgs[1].ExcludeRepos) != 1 || cfg.Gitea.Orgs[1].ExcludeRepos[0] != "old" {
+		t.Errorf("Orgs[1].ExcludeRepos = %v, want [old]", cfg.Gitea.Orgs[1].ExcludeRepos)
+	}
+}
+
+func TestValidate_MultiOrg(t *testing.T) {
+	cfg := Config{
+		Gitea: GiteaConfig{
+			URL:   "https://gitea.example.com",
+			Token: "tok",
+			Orgs:  []OrgConfig{{Name: "org-a"}},
+		},
+		TargetModule: "gitea.example.com/lib/utils",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() with orgs failed: %v", err)
+	}
+}
+
+func TestValidate_NoOrgNoOrgs(t *testing.T) {
+	cfg := Config{
+		Gitea: GiteaConfig{
+			URL:   "https://gitea.example.com",
+			Token: "tok",
+		},
+		TargetModule: "gitea.example.com/lib/utils",
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("Validate() expected error when neither org nor orgs set")
+	}
+	want := "gitea.org or gitea.orgs is required when not in offline mode"
+	if err.Error() != want {
+		t.Errorf("Validate() error = %q, want %q", err.Error(), want)
+	}
+}
