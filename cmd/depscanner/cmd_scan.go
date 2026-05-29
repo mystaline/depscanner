@@ -227,6 +227,10 @@ func runScan(_ *cobra.Command, _ []string) error {
 	// Accumulate totals across orgs for the final summary.
 	var totalGoMod, totalTarget int
 
+	// Accumulators for single-JSON-object output across all orgs.
+	var allJSONResults []repoScanResult
+	var allJSONGoMod, allJSONTarget int
+
 	for _, orgSet := range orgSets {
 		currentMgr := orgSet.mgr
 
@@ -415,10 +419,10 @@ func runScan(_ *cobra.Command, _ []string) error {
 		}
 
 		processFnWithBranch := func(r gitea.Repository, _ bool) {
-			targetBranch := cfg.GetBranchForRepo(r.Name, branch)
-			ok, err := currentMgr.SyncBranchQuiet(r.Name, r.CloneURL, targetBranch)
+			repoBranch := cfg.GetBranchForRepo(r.Name, branch)
+			ok, err := currentMgr.SyncBranchQuiet(r.Name, r.CloneURL, repoBranch)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "  warn: sync %s@%s: %v\n", r.Name, targetBranch, err)
+				fmt.Fprintf(os.Stderr, "  warn: sync %s@%s: %v\n", r.Name, repoBranch, err)
 				processFn(r, false)
 				return
 			}
@@ -437,29 +441,9 @@ func runScan(_ *cobra.Command, _ []string) error {
 		totalTarget += targetCount
 
 		if format == "json" {
-			sigs := make(map[string]int)
-			for name, sig := range targetSigs {
-				sigs[name] = sig.ParamsCount
-			}
-			out := scanOutput{
-				Repos:        results,
-				TargetModule: cfg.TargetModule,
-				Branch:       branch,
-				FuncNames:    funcNames,
-				MethodNames:  methodNames,
-				TypeNames:    typeNames,
-				ConstNames:   constNames,
-				VarNames:     varNames,
-				Total:        len(results),
-				GoModCount:   goModCount,
-				TargetCount:  targetCount,
-			}
-			if len(sigs) > 0 {
-				out.Signatures = sigs
-			}
-			if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
-				return err
-			}
+			allJSONResults = append(allJSONResults, results...)
+			allJSONGoMod += goModCount
+			allJSONTarget += targetCount
 			continue
 		}
 
@@ -535,13 +519,35 @@ func runScan(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	if format != "json" {
-		fmt.Printf("\nTarget: %s\n", cfg.TargetModule)
-		if branch != "" {
-			fmt.Printf("Branch: %s -> %s@%s (latest: %s)\n", branch, cfg.TargetModule, targetBranch, shortenHash(latestTargetHash))
+	if format == "json" {
+		sigs := make(map[string]int)
+		for name, sig := range targetSigs {
+			sigs[name] = sig.ParamsCount
 		}
-		fmt.Printf("Summary: %d/%d Go repos depend on target module\n", totalTarget, totalGoMod)
+		out := scanOutput{
+			Repos:        allJSONResults,
+			TargetModule: cfg.TargetModule,
+			Branch:       branch,
+			FuncNames:    funcNames,
+			MethodNames:  methodNames,
+			TypeNames:    typeNames,
+			ConstNames:   constNames,
+			VarNames:     varNames,
+			Total:        len(allJSONResults),
+			GoModCount:   allJSONGoMod,
+			TargetCount:  allJSONTarget,
+		}
+		if len(sigs) > 0 {
+			out.Signatures = sigs
+		}
+		return json.NewEncoder(os.Stdout).Encode(out)
 	}
+
+	fmt.Printf("\nTarget: %s\n", cfg.TargetModule)
+	if branch != "" {
+		fmt.Printf("Branch: %s -> %s@%s (latest: %s)\n", branch, cfg.TargetModule, targetBranch, shortenHash(latestTargetHash))
+	}
+	fmt.Printf("Summary: %d/%d Go repos depend on target module\n", totalTarget, totalGoMod)
 	return nil
 }
 
