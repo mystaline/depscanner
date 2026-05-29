@@ -430,9 +430,9 @@ func runScan(_ *cobra.Command, _ []string) error {
 		}
 
 		if branch == "" {
-			currentMgr.PipelineSyncAndProcess(orgSet.repos, noFetch, 4, processFn)
+			currentMgr.PipelineSyncAndProcess(orgSet.repos, noFetch, 0, processFn)
 		} else {
-			currentMgr.PipelineSyncAndProcess(orgSet.repos, noFetch, 4, processFnWithBranch)
+			currentMgr.PipelineSyncAndProcess(orgSet.repos, noFetch, 0, processFnWithBranch)
 		}
 		fmt.Println()
 

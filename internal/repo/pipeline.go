@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -24,7 +25,7 @@ type ProcessFunc func(repo gitea.Repository, synced bool)
 // If concurrency <= 0, it defaults to 4.
 func (m *Manager) PipelineSyncAndProcess(repos []gitea.Repository, noFetch bool, concurrency int, processFn ProcessFunc) {
 	if concurrency <= 0 {
-		concurrency = 4
+		concurrency = runtime.NumCPU()
 	}
 
 	if err := os.MkdirAll(m.cacheDir, 0o755); err != nil {
@@ -68,7 +69,7 @@ func (m *Manager) PipelineSyncAndProcess(repos []gitea.Repository, noFetch bool,
 // syncs a specific branch instead of the default branch.
 func (m *Manager) PipelineSyncBranchAndProcess(repos []gitea.Repository, branch string, noFetch bool, concurrency int, processFn ProcessFunc) {
 	if concurrency <= 0 {
-		concurrency = 4
+		concurrency = runtime.NumCPU()
 	}
 
 	if err := os.MkdirAll(m.cacheDir, 0o755); err != nil {
