@@ -47,6 +47,7 @@ func init() {
 	rootCmd.AddCommand(newScanCmd())
 	rootCmd.AddCommand(newDiffCmd())
 	rootCmd.AddCommand(newImpactCmd())
+	rootCmd.AddCommand(newUnshallowCmd())
 }
 
 func main() {
