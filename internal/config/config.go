@@ -158,6 +158,9 @@ func (c *Config) ActiveOrgs() []OrgConfig {
 	if len(c.Gitea.Orgs) > 0 {
 		return c.Gitea.Orgs
 	}
+	if c.Gitea.Org == "" {
+		return nil
+	}
 	return []OrgConfig{{
 		Name:         c.Gitea.Org,
 		IncludeRepos: c.IncludeRepos,

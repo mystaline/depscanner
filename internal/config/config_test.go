@@ -163,7 +163,7 @@ func TestValidate(t *testing.T) {
 				TargetModule: "github.com/example/lib",
 			},
 			expectErr: true,
-			errMsg:    "gitea.org is required when not in offline mode",
+			errMsg:    "gitea.org or gitea.orgs is required when not in offline mode",
 		},
 		{
 			name: "missing target_module",
