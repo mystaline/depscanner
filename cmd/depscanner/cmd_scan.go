@@ -121,28 +121,42 @@ func runScan(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("config: %w", err)
 	}
 
-	mgr := repo.NewManager(cfg.CacheDir, cfg.Gitea.Org)
-
-	var repos []gitea.Repository
-	if cfg.Offline {
-		noFetch = true
-		fmt.Printf("Listing repositories from local cache: %s\n", mgr.GetOrgPath())
-		var lerr error
-		repos, lerr = mgr.ListLocalRepos()
-		if lerr != nil {
-			return fmt.Errorf("list local repos: %w", lerr)
-		}
-	} else {
-		giteaClient := gitea.NewClient(cfg.Gitea.URL, cfg.Gitea.Token)
-		fmt.Printf("Fetching repository list from %s...\n", cfg.Gitea.URL)
-		var lerr error
-		repos, lerr = giteaClient.ListOrgRepos(cfg.Gitea.Org)
-		if lerr != nil {
-			return fmt.Errorf("list repos: %w", lerr)
-		}
+	type orgScanSet struct {
+		orgName string
+		mgr     *repo.Manager
+		repos   []gitea.Repository
 	}
-	repos = filterRepos(repos, cfg.IncludeRepos, cfg.ExcludeRepos)
-	fmt.Printf("Found %d repositories\n\n", len(repos))
+
+	activeOrgs := cfg.ActiveOrgs()
+	var orgSets []orgScanSet
+
+	for _, orgCfg := range activeOrgs {
+		orgMgr := repo.NewManager(cfg.CacheDir, orgCfg.Name)
+		var orgRepos []gitea.Repository
+
+		if cfg.Offline {
+			noFetch = true
+			fmt.Printf("Listing repositories from local cache: %s\n", orgMgr.GetOrgPath())
+			var lerr error
+			orgRepos, lerr = orgMgr.ListLocalRepos()
+			if lerr != nil {
+				return fmt.Errorf("list local repos for %s: %w", orgCfg.Name, lerr)
+			}
+		} else {
+			giteaClient := gitea.NewClient(cfg.Gitea.URL, cfg.Gitea.Token)
+			fmt.Printf("Fetching repository list for %s from %s...\n", orgCfg.Name, cfg.Gitea.URL)
+			var lerr error
+			orgRepos, lerr = giteaClient.ListOrgRepos(orgCfg.Name)
+			if lerr != nil {
+				return fmt.Errorf("list repos for %s: %w", orgCfg.Name, lerr)
+			}
+		}
+
+		orgRepos = filterRepos(orgRepos, orgCfg.IncludeRepos, orgCfg.ExcludeRepos)
+		fmt.Printf("  %s: %d repositories\n", orgCfg.Name, len(orgRepos))
+		orgSets = append(orgSets, orgScanSet{orgName: orgCfg.Name, mgr: orgMgr, repos: orgRepos})
+	}
+	fmt.Println()
 
 	// Resolve the target module's latest commit for the tracked branch.
 	var latestTargetHash string
@@ -176,11 +190,12 @@ func runScan(_ *cobra.Command, _ []string) error {
 		}
 		targetOwner, targetRepo := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
 		if targetOwner != "" {
-			targetPath := mgr.GetRepoPath(targetRepo)
+			targetMgr := repo.NewManager(cfg.CacheDir, targetOwner)
+			targetPath := targetMgr.GetRepoPath(targetRepo)
 			if !cfg.Offline {
 				if _, statErr := os.Stat(targetPath); statErr != nil {
 					fmt.Printf("Syncing target module for signature check...\n")
-					_, syncErr := mgr.SyncBranch(targetRepo, fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo), targetBranch)
+					_, syncErr := targetMgr.SyncBranch(targetRepo, fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo), targetBranch)
 					if syncErr != nil {
 						fmt.Fprintf(os.Stderr, "  warn: failed to sync target module: %v\n", syncErr)
 					}
@@ -207,331 +222,324 @@ func runScan(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Pipeline: sync repos concurrently and process each one as soon as it's ready.
-	// Results are buffered and sorted at the end for deterministic output.
-	var (
-		mu          sync.Mutex
-		results     []repoScanResult
-		goModCount  int
-		targetCount int
-	)
+	multiOrg := len(orgSets) > 1
 
-	processFn := func(r gitea.Repository, synced bool) {
-		repoPath := mgr.GetRepoPath(r.Name)
-		goModPath := filepath.Join(repoPath, "go.mod")
-		_, statErr := os.Stat(goModPath)
-		hasGoMod := statErr == nil
+	// Accumulate totals across orgs for the final summary.
+	var totalGoMod, totalTarget int
 
-		// Use the correct branch for display/logic
-		targetBranchForRepo := cfg.GetBranchForRepo(r.Name, branch)
+	for _, orgSet := range orgSets {
+		currentMgr := orgSet.mgr
 
-		var usesTarget bool
-		var targetVersion, commitHash, status, statusDetail string
-		if hasGoMod {
-			info, parseErr := analysis.ParseGoMod(goModPath, cfg.TargetModule)
-			if parseErr != nil {
-				fmt.Fprintf(os.Stderr, "  warn: parse go.mod for %s: %v\n", r.Name, parseErr)
-			} else if info.Found {
-				usesTarget = true
-				targetVersion = info.Version
+		var (
+			mu          sync.Mutex
+			results     []repoScanResult
+			goModCount  int
+			targetCount int
+		)
 
-				// Staleness detection when branch is active.
-				if branch != "" && latestTargetHash != "" {
-					commitHash, status, statusDetail = detectStaleness(info.Version, latestTargetHash)
+		processFn := func(r gitea.Repository, synced bool) {
+			repoPath := currentMgr.GetRepoPath(r.Name)
+			goModPath := filepath.Join(repoPath, "go.mod")
+			_, statErr := os.Stat(goModPath)
+			hasGoMod := statErr == nil
+
+			targetBranchForRepo := cfg.GetBranchForRepo(r.Name, branch)
+
+			var usesTarget bool
+			var targetVersion, commitHash, status, statusDetail string
+			if hasGoMod {
+				info, parseErr := analysis.ParseGoMod(goModPath, cfg.TargetModule)
+				if parseErr != nil {
+					fmt.Fprintf(os.Stderr, "  warn: parse go.mod for %s: %v\n", r.Name, parseErr)
+				} else if info.Found {
+					usesTarget = true
+					targetVersion = info.Version
+
+					if branch != "" && latestTargetHash != "" {
+						commitHash, status, statusDetail = detectStaleness(info.Version, latestTargetHash)
+					}
 				}
 			}
-		}
 
-		// Sub-package import scanning.
-		var pkgs []string
-		if packages && usesTarget {
-			var scanErr error
-			pkgs, scanErr = analysis.ScanImports(repoPath, cfg.TargetModule)
-			if scanErr != nil {
-				fmt.Fprintf(os.Stderr, "  warn: scan imports for %s: %v\n", r.Name, scanErr)
-			}
-		}
-
-		// Function call-site search.
-		var callSites []callSiteResult
-		if len(funcNames) > 0 && usesTarget {
-			for _, name := range funcNames {
-				sites, warnings, scanErr := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, name)
+			var pkgs []string
+			if packages && usesTarget {
+				var scanErr error
+				pkgs, scanErr = analysis.ScanImports(repoPath, cfg.TargetModule)
 				if scanErr != nil {
-					fmt.Fprintf(os.Stderr, "  warn: scan call sites for %s: %v\n", r.Name, scanErr)
-				}
-				for _, w := range warnings {
-					fmt.Fprintf(os.Stderr, "  warn: %s: %s\n", r.Name, w)
-				}
-				for _, s := range sites {
-					callSites = append(callSites, callSiteResult{
-						SearchedFor: name,
-						File:        s.File,
-						Line:        s.Line,
-						Column:      s.Column,
-						FuncName:    s.FuncName,
-						RawName:     s.RawName,
-						ArgCount:    s.ArgCount,
-					})
+					fmt.Fprintf(os.Stderr, "  warn: scan imports for %s: %v\n", r.Name, scanErr)
 				}
 			}
-		}
 
-		// Method call-site search.
-		var methodSites []callSiteResult
-		if len(methodNames) > 0 && usesTarget {
-			for _, name := range methodNames {
-				sites, warnings, scanErr := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, name)
-				if scanErr != nil {
-					fmt.Fprintf(os.Stderr, "  warn: scan method sites for %s: %v\n", r.Name, scanErr)
-				}
-				for _, w := range warnings {
-					fmt.Fprintf(os.Stderr, "  warn: %s: %s\n", r.Name, w)
-				}
-				for _, s := range sites {
-					methodSites = append(methodSites, callSiteResult{
-						SearchedFor: name,
-						File:        s.File,
-						Line:        s.Line,
-						Column:      s.Column,
-						FuncName:    s.FuncName,
-						RawName:     s.RawName,
-						ArgCount:    s.ArgCount,
-					})
-				}
-			}
-		}
-
-		// Type/interface reference search.
-		var typeRefs []typeRefResult
-		if len(typeNames) > 0 && usesTarget {
-			for _, name := range typeNames {
-				refs, scanErr := analysis.ScanTypeReferences(repoPath, cfg.TargetModule, name)
-				if scanErr != nil {
-					fmt.Fprintf(os.Stderr, "  warn: scan type refs for %s: %v\n", r.Name, scanErr)
-				}
-				for _, ref := range refs {
-					typeRefs = append(typeRefs, typeRefResult{
-						SearchedFor: name,
-						File:        ref.File,
-						Line:        ref.Line,
-						TypeName:    ref.TypeName,
-						RawName:     ref.RawName,
-						Context:     ref.Context,
-					})
+			var callSites []callSiteResult
+			if len(funcNames) > 0 && usesTarget {
+				for _, name := range funcNames {
+					sites, warnings, scanErr := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, name)
+					if scanErr != nil {
+						fmt.Fprintf(os.Stderr, "  warn: scan call sites for %s: %v\n", r.Name, scanErr)
+					}
+					for _, w := range warnings {
+						fmt.Fprintf(os.Stderr, "  warn: %s: %s\n", r.Name, w)
+					}
+					for _, s := range sites {
+						callSites = append(callSites, callSiteResult{
+							SearchedFor: name,
+							File:        s.File,
+							Line:        s.Line,
+							Column:      s.Column,
+							FuncName:    s.FuncName,
+							RawName:     s.RawName,
+							ArgCount:    s.ArgCount,
+						})
+					}
 				}
 			}
-		}
 
-		// Const reference search.
-		var constRefs []symbolRefResult
-		if len(constNames) > 0 && usesTarget {
-			for _, name := range constNames {
-				sites, warnings, scanErr := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, name)
-				if scanErr != nil {
-					fmt.Fprintf(os.Stderr, "  warn: scan const refs for %s: %v\n", r.Name, scanErr)
-				}
-				for _, w := range warnings {
-					fmt.Fprintf(os.Stderr, "  warn: %s: %s\n", r.Name, w)
-				}
-				for _, s := range sites {
-					constRefs = append(constRefs, symbolRefResult{
-						SearchedFor: name,
-						File:        s.File,
-						Line:        s.Line,
-						Column:      s.Column,
-						Name:        s.FuncName,
-						RawName:     s.RawName,
-					})
-				}
-			}
-		}
-
-		// Var reference search.
-		var varRefs []symbolRefResult
-		if len(varNames) > 0 && usesTarget {
-			for _, name := range varNames {
-				sites, warnings, scanErr := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, name)
-				if scanErr != nil {
-					fmt.Fprintf(os.Stderr, "  warn: scan var refs for %s: %v\n", r.Name, scanErr)
-				}
-				for _, w := range warnings {
-					fmt.Fprintf(os.Stderr, "  warn: %s: %s\n", r.Name, w)
-				}
-				for _, s := range sites {
-					varRefs = append(varRefs, symbolRefResult{
-						SearchedFor: name,
-						File:        s.File,
-						Line:        s.Line,
-						Column:      s.Column,
-						Name:        s.FuncName,
-						RawName:     s.RawName,
-					})
+			var methodSites []callSiteResult
+			if len(methodNames) > 0 && usesTarget {
+				for _, name := range methodNames {
+					sites, warnings, scanErr := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, name)
+					if scanErr != nil {
+						fmt.Fprintf(os.Stderr, "  warn: scan method sites for %s: %v\n", r.Name, scanErr)
+					}
+					for _, w := range warnings {
+						fmt.Fprintf(os.Stderr, "  warn: %s: %s\n", r.Name, w)
+					}
+					for _, s := range sites {
+						methodSites = append(methodSites, callSiteResult{
+							SearchedFor: name,
+							File:        s.File,
+							Line:        s.Line,
+							Column:      s.Column,
+							FuncName:    s.FuncName,
+							RawName:     s.RawName,
+							ArgCount:    s.ArgCount,
+						})
+					}
 				}
 			}
-		}
 
-		result := repoScanResult{
-			Name:          r.Name,
-			Branch:        targetBranchForRepo,
-			HasGoMod:      hasGoMod,
-			UsesTarget:    usesTarget,
-			Packages:      pkgs,
-			CallSites:     callSites,
-			MethodSites:   methodSites,
-			TypeRefs:      typeRefs,
-			ConstRefs:     constRefs,
-			VarRefs:       varRefs,
-			TargetVersion: targetVersion,
-			CommitHash:    commitHash,
-			LatestHash:    shortenHash(latestTargetHash),
-			Status:        status,
-			StatusDetail:  statusDetail,
-			CloneURL:      r.CloneURL,
-		}
-
-		mu.Lock()
-		results = append(results, result)
-		if hasGoMod {
-			goModCount++
-		}
-		if usesTarget {
-			targetCount++
-		}
-		mu.Unlock()
-	}
-
-	processFnWithBranch := func(r gitea.Repository, _ bool) {
-		// This is a dummy call to SyncBranch inside the pipeline loop,
-		// but since we want to sync the CORRECT branch for each repo:
-		targetBranch := cfg.GetBranchForRepo(r.Name, branch)
-		ok, err := mgr.SyncBranchQuiet(r.Name, r.CloneURL, targetBranch)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  warn: sync %s@%s: %v\n", r.Name, targetBranch, err)
-			processFn(r, false)
-			return
-		}
-		processFn(r, ok)
-	}
-
-	if branch == "" {
-		mgr.PipelineSyncAndProcess(repos, noFetch, 4, processFn)
-	} else {
-		// Use generic pipeline but sync the custom branch per repo
-		mgr.PipelineSyncAndProcess(repos, noFetch, 4, processFnWithBranch)
-	}
-	fmt.Println()
-
-	// Sort results by name for deterministic output.
-	sortResults(results)
-
-	if format == "json" {
-		sigs := make(map[string]int)
-		for name, sig := range targetSigs {
-			sigs[name] = sig.ParamsCount
-		}
-		out := scanOutput{
-			Repos:        results,
-			TargetModule: cfg.TargetModule,
-			Branch:       branch,
-			FuncNames:    funcNames,
-			MethodNames:  methodNames,
-			TypeNames:    typeNames,
-			ConstNames:   constNames,
-			VarNames:     varNames,
-			Total:        len(results),
-			GoModCount:   goModCount,
-			TargetCount:  targetCount,
-		}
-		if len(sigs) > 0 {
-			out.Signatures = sigs
-		}
-		return json.NewEncoder(os.Stdout).Encode(out)
-	}
-
-	// Table output.
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	if branch != "" {
-		fmt.Fprintf(w, "  STATUS\tREPOSITORY\tVERSION/COMMIT\tSTALENESS\n")
-		fmt.Fprintf(w, "  ------\t----------\t--------------\t---------\n")
-	} else {
-		fmt.Fprintf(w, "  STATUS\tREPOSITORY\tTARGET VERSION\n")
-		fmt.Fprintf(w, "  ------\t----------\t--------------\n")
-	}
-
-	for _, r := range results {
-		switch {
-		case !r.HasGoMod:
-			if branch != "" {
-				fmt.Fprintf(w, "  %s✗%s\t%s\t%s\t\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(no go.mod)")
-			} else {
-				fmt.Fprintf(w, "  %s✗%s\t%s\t%s\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(no go.mod)")
+			var typeRefs []typeRefResult
+			if len(typeNames) > 0 && usesTarget {
+				for _, name := range typeNames {
+					refs, scanErr := analysis.ScanTypeReferences(repoPath, cfg.TargetModule, name)
+					if scanErr != nil {
+						fmt.Fprintf(os.Stderr, "  warn: scan type refs for %s: %v\n", r.Name, scanErr)
+					}
+					for _, ref := range refs {
+						typeRefs = append(typeRefs, typeRefResult{
+							SearchedFor: name,
+							File:        ref.File,
+							Line:        ref.Line,
+							TypeName:    ref.TypeName,
+							RawName:     ref.RawName,
+							Context:     ref.Context,
+						})
+					}
+				}
 			}
-		case !r.UsesTarget:
-			if branch != "" {
-				fmt.Fprintf(w, "  %s·%s\t%s\t%s\t\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(not used)")
-			} else {
-				fmt.Fprintf(w, "  %s·%s\t%s\t%s\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(not used)")
-			}
-		case branch != "" && r.Status != "":
-			versionCol := r.TargetVersion
-			if r.CommitHash != "" {
-				versionCol = r.CommitHash
-			}
-			statusColor := statusToColor(r.Status)
-			fmt.Fprintf(w, "  %s%s%s\t%s\t%s\t%s%s%s\n",
-				statusColor, statusIcon(r.Status), formatter.ColorReset(),
-				r.Name, versionCol,
-				statusColor, r.StatusDetail, formatter.ColorReset())
-		default:
-			fmt.Fprintf(w, "  %s✓%s\t%s\t%s\n", formatter.ColorGreen(), formatter.ColorReset(), r.Name, r.TargetVersion)
-		}
-	}
-	w.Flush()
 
-	// Show per-repo package usage when --packages is active.
-	if packages {
-		fmt.Println("\nSub-package usage:")
+			var constRefs []symbolRefResult
+			if len(constNames) > 0 && usesTarget {
+				for _, name := range constNames {
+					sites, warnings, scanErr := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, name)
+					if scanErr != nil {
+						fmt.Fprintf(os.Stderr, "  warn: scan const refs for %s: %v\n", r.Name, scanErr)
+					}
+					for _, w := range warnings {
+						fmt.Fprintf(os.Stderr, "  warn: %s: %s\n", r.Name, w)
+					}
+					for _, s := range sites {
+						constRefs = append(constRefs, symbolRefResult{
+							SearchedFor: name,
+							File:        s.File,
+							Line:        s.Line,
+							Column:      s.Column,
+							Name:        s.FuncName,
+							RawName:     s.RawName,
+						})
+					}
+				}
+			}
+
+			var varRefs []symbolRefResult
+			if len(varNames) > 0 && usesTarget {
+				for _, name := range varNames {
+					sites, warnings, scanErr := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, name)
+					if scanErr != nil {
+						fmt.Fprintf(os.Stderr, "  warn: scan var refs for %s: %v\n", r.Name, scanErr)
+					}
+					for _, w := range warnings {
+						fmt.Fprintf(os.Stderr, "  warn: %s: %s\n", r.Name, w)
+					}
+					for _, s := range sites {
+						varRefs = append(varRefs, symbolRefResult{
+							SearchedFor: name,
+							File:        s.File,
+							Line:        s.Line,
+							Column:      s.Column,
+							Name:        s.FuncName,
+							RawName:     s.RawName,
+						})
+					}
+				}
+			}
+
+			result := repoScanResult{
+				Name:          r.Name,
+				Branch:        targetBranchForRepo,
+				HasGoMod:      hasGoMod,
+				UsesTarget:    usesTarget,
+				Packages:      pkgs,
+				CallSites:     callSites,
+				MethodSites:   methodSites,
+				TypeRefs:      typeRefs,
+				ConstRefs:     constRefs,
+				VarRefs:       varRefs,
+				TargetVersion: targetVersion,
+				CommitHash:    commitHash,
+				LatestHash:    shortenHash(latestTargetHash),
+				Status:        status,
+				StatusDetail:  statusDetail,
+				CloneURL:      r.CloneURL,
+			}
+
+			mu.Lock()
+			results = append(results, result)
+			if hasGoMod {
+				goModCount++
+			}
+			if usesTarget {
+				targetCount++
+			}
+			mu.Unlock()
+		}
+
+		processFnWithBranch := func(r gitea.Repository, _ bool) {
+			targetBranch := cfg.GetBranchForRepo(r.Name, branch)
+			ok, err := currentMgr.SyncBranchQuiet(r.Name, r.CloneURL, targetBranch)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  warn: sync %s@%s: %v\n", r.Name, targetBranch, err)
+				processFn(r, false)
+				return
+			}
+			processFn(r, ok)
+		}
+
+		if branch == "" {
+			currentMgr.PipelineSyncAndProcess(orgSet.repos, noFetch, 4, processFn)
+		} else {
+			currentMgr.PipelineSyncAndProcess(orgSet.repos, noFetch, 4, processFnWithBranch)
+		}
+		fmt.Println()
+
+		sortResults(results)
+		totalGoMod += goModCount
+		totalTarget += targetCount
+
+		if format == "json" {
+			sigs := make(map[string]int)
+			for name, sig := range targetSigs {
+				sigs[name] = sig.ParamsCount
+			}
+			out := scanOutput{
+				Repos:        results,
+				TargetModule: cfg.TargetModule,
+				Branch:       branch,
+				FuncNames:    funcNames,
+				MethodNames:  methodNames,
+				TypeNames:    typeNames,
+				ConstNames:   constNames,
+				VarNames:     varNames,
+				Total:        len(results),
+				GoModCount:   goModCount,
+				TargetCount:  targetCount,
+			}
+			if len(sigs) > 0 {
+				out.Signatures = sigs
+			}
+			if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if multiOrg {
+			fmt.Printf("--- %s ---\n", orgSet.orgName)
+		}
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		if branch != "" {
+			fmt.Fprintf(w, "  STATUS\tREPOSITORY\tVERSION/COMMIT\tSTALENESS\n")
+			fmt.Fprintf(w, "  ------\t----------\t--------------\t---------\n")
+		} else {
+			fmt.Fprintf(w, "  STATUS\tREPOSITORY\tTARGET VERSION\n")
+			fmt.Fprintf(w, "  ------\t----------\t--------------\n")
+		}
+
 		for _, r := range results {
-			if !r.UsesTarget || len(r.Packages) == 0 {
-				continue
+			switch {
+			case !r.HasGoMod:
+				if branch != "" {
+					fmt.Fprintf(w, "  %s✗%s\t%s\t%s\t\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(no go.mod)")
+				} else {
+					fmt.Fprintf(w, "  %s✗%s\t%s\t%s\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(no go.mod)")
+				}
+			case !r.UsesTarget:
+				if branch != "" {
+					fmt.Fprintf(w, "  %s·%s\t%s\t%s\t\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(not used)")
+				} else {
+					fmt.Fprintf(w, "  %s·%s\t%s\t%s\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(not used)")
+				}
+			case branch != "" && r.Status != "":
+				versionCol := r.TargetVersion
+				if r.CommitHash != "" {
+					versionCol = r.CommitHash
+				}
+				statusColor := statusToColor(r.Status)
+				fmt.Fprintf(w, "  %s%s%s\t%s\t%s\t%s%s%s\n",
+					statusColor, statusIcon(r.Status), formatter.ColorReset(),
+					r.Name, versionCol,
+					statusColor, r.StatusDetail, formatter.ColorReset())
+			default:
+				fmt.Fprintf(w, "  %s✓%s\t%s\t%s\n", formatter.ColorGreen(), formatter.ColorReset(), r.Name, r.TargetVersion)
 			}
-			fmt.Printf("  %-35s %s\n", r.Name, strings.Join(r.Packages, ", "))
 		}
-	}
+		w.Flush()
 
-	// Show function call sites when --func is active.
-	for _, name := range funcNames {
-		printCallSites("Call sites", name, targetCount, cfg.TargetModule, results, targetSigs,
-			func(r repoScanResult) []callSiteResult { return r.CallSites })
-	}
+		if packages {
+			fmt.Println("\nSub-package usage:")
+			for _, r := range results {
+				if !r.UsesTarget || len(r.Packages) == 0 {
+					continue
+				}
+				fmt.Printf("  %-35s %s\n", r.Name, strings.Join(r.Packages, ", "))
+			}
+		}
 
-	// Show method call sites when --method is active.
-	for _, name := range methodNames {
-		printCallSites("Method call sites", name, targetCount, cfg.TargetModule, results, nil,
-			func(r repoScanResult) []callSiteResult { return r.MethodSites })
-	}
-
-	// Show type/interface references when --type is active.
-	for _, name := range typeNames {
-		printTypeRefs(name, targetCount, cfg.TargetModule, results)
-	}
-
-	// Show const references when --const is active.
-	for _, name := range constNames {
-		printSymbolRefs("Const references", name, targetCount, cfg.TargetModule, results, func(r repoScanResult) []symbolRefResult { return r.ConstRefs })
-	}
-
-	// Show var references when --var is active.
-	for _, name := range varNames {
-		printSymbolRefs("Var references", name, targetCount, cfg.TargetModule, results, func(r repoScanResult) []symbolRefResult { return r.VarRefs })
+		for _, name := range funcNames {
+			printCallSites("Call sites", name, targetCount, cfg.TargetModule, results, targetSigs,
+				func(r repoScanResult) []callSiteResult { return r.CallSites })
+		}
+		for _, name := range methodNames {
+			printCallSites("Method call sites", name, targetCount, cfg.TargetModule, results, nil,
+				func(r repoScanResult) []callSiteResult { return r.MethodSites })
+		}
+		for _, name := range typeNames {
+			printTypeRefs(name, targetCount, cfg.TargetModule, results)
+		}
+		for _, name := range constNames {
+			printSymbolRefs("Const references", name, targetCount, cfg.TargetModule, results, func(r repoScanResult) []symbolRefResult { return r.ConstRefs })
+		}
+		for _, name := range varNames {
+			printSymbolRefs("Var references", name, targetCount, cfg.TargetModule, results, func(r repoScanResult) []symbolRefResult { return r.VarRefs })
+		}
 	}
 
 	fmt.Printf("\nTarget: %s\n", cfg.TargetModule)
 	if branch != "" {
 		fmt.Printf("Branch: %s -> %s@%s (latest: %s)\n", branch, cfg.TargetModule, targetBranch, shortenHash(latestTargetHash))
 	}
-	fmt.Printf("Summary: %d/%d Go repos depend on target module\n", targetCount, goModCount)
+	fmt.Printf("Summary: %d/%d Go repos depend on target module\n", totalTarget, totalGoMod)
 	return nil
 }
 
