@@ -278,6 +278,9 @@ func TestActiveOrgs_MultiOrg(t *testing.T) {
 	if orgs[1].Name != "org-b" {
 		t.Errorf("orgs[1].Name = %q, want \"org-b\"", orgs[1].Name)
 	}
+	if len(orgs[1].ExcludeRepos) != 1 || orgs[1].ExcludeRepos[0] != "old" {
+		t.Errorf("orgs[1].ExcludeRepos = %v, want [old]", orgs[1].ExcludeRepos)
+	}
 }
 
 func TestActiveOrgs_SingleOrgFallback(t *testing.T) {
@@ -332,6 +335,9 @@ target_module: "gitea.example.com/lib/utils"
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() failed on loaded multi-org config: %v", err)
+	}
 	if len(cfg.Gitea.Orgs) != 2 {
 		t.Fatalf("Gitea.Orgs len = %d, want 2", len(cfg.Gitea.Orgs))
 	}
@@ -378,5 +384,22 @@ func TestValidate_NoOrgNoOrgs(t *testing.T) {
 	want := "gitea.org or gitea.orgs is required when not in offline mode"
 	if err.Error() != want {
 		t.Errorf("Validate() error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestActiveOrgs_OrgsPreferenceOverOrg(t *testing.T) {
+	cfg := &Config{
+		Gitea: GiteaConfig{
+			Org:  "legacy-org",
+			Orgs: []OrgConfig{{Name: "priority-org"}},
+		},
+		IncludeRepos: []string{"svc-a"},
+	}
+	orgs := cfg.ActiveOrgs()
+	if len(orgs) != 1 {
+		t.Fatalf("ActiveOrgs() len = %d, want 1", len(orgs))
+	}
+	if orgs[0].Name != "priority-org" {
+		t.Errorf("orgs[0].Name = %q, want \"priority-org\"", orgs[0].Name)
 	}
 }
