@@ -11,11 +11,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// OrgConfig holds per-org settings for multi-org mode.
+type OrgConfig struct {
+	Name         string   `yaml:"name"`
+	IncludeRepos []string `yaml:"include_repos"`
+	ExcludeRepos []string `yaml:"exclude_repos"`
+}
+
 // GiteaConfig holds connection details for the Gitea instance.
 type GiteaConfig struct {
-	URL   string `yaml:"url"`
-	Token string `yaml:"token"`
-	Org   string `yaml:"org"`
+	URL   string      `yaml:"url"`
+	Token string      `yaml:"token"`
+	Org   string      `yaml:"org"`
+	Orgs  []OrgConfig `yaml:"orgs"`
 }
 
 // Config holds all runtime configuration for depscanner.
@@ -39,8 +47,8 @@ func (c *Config) Validate() error {
 		if c.Gitea.Token == "" {
 			return fmt.Errorf("gitea.token is required when not in offline mode")
 		}
-		if c.Gitea.Org == "" {
-			return fmt.Errorf("gitea.org is required when not in offline mode")
+		if c.Gitea.Org == "" && len(c.Gitea.Orgs) == 0 {
+			return fmt.Errorf("gitea.org or gitea.orgs is required when not in offline mode")
 		}
 	}
 	if c.TargetModule == "" {
@@ -141,4 +149,18 @@ func (c *Config) GetBranchForRepo(repoName string, branchFlag string) string {
 
 	// 3. Fallback to literal branch name
 	return branchFlag
+}
+
+// ActiveOrgs returns the list of orgs to scan.
+// If gitea.orgs is set, it is used directly.
+// Otherwise falls back to the legacy gitea.org + top-level include/exclude.
+func (c *Config) ActiveOrgs() []OrgConfig {
+	if len(c.Gitea.Orgs) > 0 {
+		return c.Gitea.Orgs
+	}
+	return []OrgConfig{{
+		Name:         c.Gitea.Org,
+		IncludeRepos: c.IncludeRepos,
+		ExcludeRepos: c.ExcludeRepos,
+	}}
 }
