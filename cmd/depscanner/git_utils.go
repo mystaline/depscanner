@@ -26,6 +26,7 @@ func unshallowTargetRepo(repoPath string, timeout time.Duration, branches []stri
 	_ = exec.Command("git", "-C", repoPath, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*").Run()
 
 	for _, branch := range branches {
+		clearStaleLocks(repoPath)
 		fmt.Printf("\n  [%s] ", branch)
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "--depth=2147483647", "--progress", "origin", branch)
