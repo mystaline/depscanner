@@ -61,7 +61,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 
 	// Ensure target repo is updated and unshallowed for ancestry checks (if online)
 	if !noFetch {
-		unshallowTargetRepo(targetRepoPath)
+		unshallowTargetRepo(targetRepoPath, defaultUnshallowTimeout, cfg.UnshallowBranches)
 		if branch != "" {
 			// Ensure the specific branch we are interested in is fetched
 			_ = exec.Command("git", "-C", targetRepoPath, "fetch", "origin", branch+":"+branch, "--quiet").Run()

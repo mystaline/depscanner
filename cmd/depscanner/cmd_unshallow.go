@@ -5,13 +5,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mystaline/depscanner/internal/config"
 	"github.com/spf13/cobra"
 )
 
+const defaultUnshallowTimeout = 30 * time.Minute
+
 func newUnshallowCmd() *cobra.Command {
-	return &cobra.Command{
+	var timeoutMin int
+	cmd := &cobra.Command{
 		Use:   "unshallow [repo-name]",
 		Short: "Fetch full git history for cached repos",
 		Long: `Converts shallow-cloned repos in the local cache to full clones.
@@ -31,16 +35,19 @@ Next sync without --no-fetch will re-shallow automatically.`,
 				cfg.CacheDir = cacheDir
 			}
 
+			timeout := time.Duration(timeoutMin) * time.Minute
 			if len(args) == 1 {
-				return unshallowFind(cfg.CacheDir, args[0])
+				return unshallowFind(cfg.CacheDir, args[0], timeout, cfg.UnshallowBranches)
 			}
-			return unshallowAllOrgs(cfg.CacheDir)
+			return unshallowAllOrgs(cfg.CacheDir, timeout, cfg.UnshallowBranches)
 		},
 	}
+	cmd.Flags().IntVar(&timeoutMin, "timeout", 30, "per-repo timeout in minutes")
+	return cmd
 }
 
 // unshallowFind searches all org subdirs under cacheDir for a repo by name.
-func unshallowFind(cacheDir, name string) error {
+func unshallowFind(cacheDir, name string, timeout time.Duration, branches []string) error {
 	orgs, err := os.ReadDir(cacheDir)
 	if err != nil {
 		return fmt.Errorf("read cache dir: %w", err)
@@ -52,7 +59,10 @@ func unshallowFind(cacheDir, name string) error {
 		repoPath := filepath.Join(cacheDir, org.Name(), name)
 		if _, err := os.Stat(filepath.Join(repoPath, ".git")); err == nil {
 			fmt.Printf("unshallowing %s/%s... ", org.Name(), name)
-			unshallowTargetRepo(repoPath)
+			if err := unshallowTargetRepo(repoPath, timeout, branches); err != nil {
+				fmt.Printf("error: %v\n", err)
+				return err
+			}
 			fmt.Println("done")
 			return nil
 		}
@@ -61,7 +71,7 @@ func unshallowFind(cacheDir, name string) error {
 }
 
 // unshallowAllOrgs unshallows every repo across all org subdirs under cacheDir.
-func unshallowAllOrgs(cacheDir string) error {
+func unshallowAllOrgs(cacheDir string, timeout time.Duration, branches []string) error {
 	orgs, err := os.ReadDir(cacheDir)
 	if err != nil {
 		return fmt.Errorf("read cache dir: %w", err)
@@ -87,7 +97,10 @@ func unshallowAllOrgs(cacheDir string) error {
 			}
 			found = true
 			fmt.Printf("unshallowing %-50s ", org.Name()+"/"+r.Name())
-			unshallowTargetRepo(repoPath)
+			if err := unshallowTargetRepo(repoPath, timeout, branches); err != nil {
+				fmt.Printf("error: %v\n", err)
+				continue
+			}
 			fmt.Println("done")
 		}
 	}

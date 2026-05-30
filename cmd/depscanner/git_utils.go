@@ -1,24 +1,41 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
-// unshallowTargetRepo ensures the repository has full history and is configured
-// to fetch all branches (not just the default one from a shallow clone).
-func unshallowTargetRepo(repoPath string) {
+// clearStaleLocks removes lock files left by previously interrupted git operations.
+func clearStaleLocks(repoPath string) {
+	for _, lock := range []string{"shallow.lock", "index.lock"} {
+		_ = os.Remove(filepath.Join(repoPath, ".git", lock))
+	}
+}
+
+// unshallowTargetRepo deepens history for the given branches only.
+// Non-existent branches on the remote are silently skipped.
+func unshallowTargetRepo(repoPath string, timeout time.Duration, branches []string) error {
+	clearStaleLocks(repoPath)
+
 	// Fix single-branch refspec from shallow clone so all branches are fetchable.
 	_ = exec.Command("git", "-C", repoPath, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*").Run()
 
-	if _, err := os.Stat(filepath.Join(repoPath, ".git", "shallow")); err == nil {
-		_ = exec.Command("git", "-C", repoPath, "fetch", "--unshallow", "--quiet").Run()
+	for _, branch := range branches {
+		fmt.Printf("\n  [%s] ", branch)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "--depth=2147483647", "--progress", "origin", branch)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		_ = cmd.Run()
+		cancel()
 	}
-
-	// Fetch all remote branches now that the refspec covers everything.
-	_ = exec.Command("git", "-C", repoPath, "fetch", "--all", "--quiet").Run()
+	fmt.Println()
+	return nil
 }
 
 // isAncestor checks if the ancestor commit hash is in the history of the descendant.

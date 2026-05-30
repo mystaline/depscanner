@@ -61,7 +61,7 @@ func runDiff(_ *cobra.Command, args []string) error {
 	// Unshallow to access full history if online.
 	if !cfg.Offline {
 		fmt.Printf("Fetching history for %s...\n", targetRepo)
-		unshallowTargetRepo(repoPath)
+		unshallowTargetRepo(repoPath, defaultUnshallowTimeout, cfg.UnshallowBranches)
 	}
 
 	// Phase A

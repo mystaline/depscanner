@@ -14,6 +14,13 @@ import (
 
 var validBranchRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]*$`)
 
+// clearStaleLocks removes lock files left by previously interrupted git operations.
+func clearStaleLocks(repoPath string) {
+	for _, lock := range []string{"shallow.lock", "index.lock"} {
+		_ = os.Remove(filepath.Join(repoPath, ".git", lock))
+	}
+}
+
 // isValidBranchName checks that a branch name is safe to pass to git commands.
 func isValidBranchName(name string) bool {
 	return validBranchRe.MatchString(name)
@@ -45,6 +52,7 @@ func (m *Manager) SyncRepos(repos []gitea.Repository, noFetch bool) error {
 
 func (m *Manager) syncRepo(r gitea.Repository, noFetch bool) error {
 	dest := m.GetRepoPath(r.Name)
+	clearStaleLocks(dest)
 
 	// Clone if the repo doesn't exist locally yet.
 	if _, err := os.Stat(filepath.Join(dest, ".git")); os.IsNotExist(err) {
@@ -90,6 +98,7 @@ func (m *Manager) SyncBranch(repoName, cloneURL, branch string) (bool, error) {
 	}
 
 	dest := m.GetRepoPath(repoName)
+	clearStaleLocks(dest)
 
 	// Clone if the repo doesn't exist locally yet.
 	if _, err := os.Stat(filepath.Join(dest, ".git")); os.IsNotExist(err) {
@@ -110,13 +119,15 @@ func (m *Manager) SyncBranch(repoName, cloneURL, branch string) (bool, error) {
 		return false, nil
 	}
 
-	// Checkout using FETCH_HEAD
+	// Checkout using FETCH_HEAD and set upstream tracking so future pulls don't diverge.
 	checkout := exec.Command("git", "-C", dest, "checkout", "--quiet", "-B", branch, "FETCH_HEAD")
 	checkout.Stdout = nil
 	checkout.Stderr = nil
 	if err := checkout.Run(); err != nil {
 		return false, fmt.Errorf("checkout %s failed", branch)
 	}
+
+	_ = exec.Command("git", "-C", dest, "branch", "--set-upstream-to=origin/"+branch, branch).Run()
 
 	return true, nil
 }
@@ -158,6 +169,7 @@ func (m *Manager) CheckoutCommit(repoName, ref string) error {
 	if _, err := os.Stat(filepath.Join(dest, ".git")); os.IsNotExist(err) {
 		return fmt.Errorf("repo %s not cloned yet", repoName)
 	}
+	clearStaleLocks(dest)
 
 	// Attempt to fetch the ref.
 	fetch := exec.Command("git", "-C", dest, "fetch", "--quiet", "origin", ref)
@@ -174,7 +186,9 @@ func (m *Manager) CheckoutCommit(repoName, ref string) error {
 		checkout2 := exec.Command("git", "-C", dest, "checkout", "--quiet", "--detach", "FETCH_HEAD")
 		checkout2.Stdout = nil
 		checkout2.Stderr = nil
-		_ = checkout2.Run()
+		if err2 := checkout2.Run(); err2 != nil {
+			return fmt.Errorf("checkout %s in %s failed: %w", ref, repoName, err)
+		}
 	}
 
 	return nil

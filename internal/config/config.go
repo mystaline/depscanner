@@ -33,8 +33,9 @@ type Config struct {
 	CacheDir        string            `yaml:"cache_dir"`
 	IncludeRepos    []string          `yaml:"include_repos"`
 	ExcludeRepos    []string          `yaml:"exclude_repos"`
-	DefaultBranch   string            `yaml:"default_branch"`
-	BranchTracking  map[string]string `yaml:"branch_tracking"`
+	DefaultBranch     string            `yaml:"default_branch"`
+	BranchTracking    map[string]string `yaml:"branch_tracking"`
+	UnshallowBranches []string          `yaml:"unshallow_branches"`
 	Offline         bool              `yaml:"offline"`
 }
 
@@ -98,13 +99,20 @@ func Load(path string) (*Config, error) {
 			"main":    "main",
 		}
 	}
+	if len(cfg.UnshallowBranches) == 0 {
+		cfg.UnshallowBranches = defaultUnshallowBranches()
+	}
 	return &cfg, nil
+}
+
+func defaultUnshallowBranches() []string {
+	return []string{"main"}
 }
 
 func defaults() *Config {
 	cacheDir, _ := expandHome("~/.depscanner/repos")
 	if cacheDir == "" {
-		cacheDir = ".depscanner/repos" // fallback to relative path
+		cacheDir = ".depscanner/repos"
 	}
 	return &Config{
 		CacheDir:      cacheDir,
@@ -114,6 +122,7 @@ func defaults() *Config {
 			"staging": "staging",
 			"main":    "main",
 		},
+		UnshallowBranches: defaultUnshallowBranches(),
 	}
 }
 
