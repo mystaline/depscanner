@@ -14,12 +14,12 @@ var version = "0.6.0"
 var formatter OutputFormatter
 
 var (
-	cfgPath  string
-	cacheDir string
-	format   string
-	noFetch  bool
-	branch   string
-	packages bool
+	cfgPath     string
+	cacheDir    string
+	format      string
+	noFetch     bool
+	branch      string
+	packages    bool
 	funcNames   []string
 	methodNames []string
 	typeNames   []string
@@ -54,5 +54,40 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+}
+
+func test() {
+	type SystemRoleGlobal string
+	type SystemRoleGroup string
+	type SystemRoleAttribute string
+	type TransactionRole string
+	type TransactionRoleType string
+
+	const (
+		SystemRoleGlobalAssetAttribute SystemRoleGlobal = "assetAttribute"
+
+		SystemRoleGroupManageRole SystemRoleGroup = "manageRole"
+
+		SystemRoleAttributeCreate SystemRoleAttribute = "create"
+		SystemRoleAttributeView   SystemRoleAttribute = "view" // read
+		SystemRoleAttributeEdit   SystemRoleAttribute = "edit" // update
+		SystemRoleAttributeDelete SystemRoleAttribute = "delete"
+
+		TransactionRoleBorrowing TransactionRole = "borrowingRole"
+
+		TransactionRoleTypeManager TransactionRoleType = "manager"
+	)
+
+	type User struct {
+		ID          string
+		FullName    string
+		Email       string
+		CompanyCode string
+		SystemRole  struct {
+			GlobalRole map[SystemRoleGlobal]map[SystemRoleAttribute]bool
+			GroupRoles map[SystemRoleGroup][]string // group ids
+		}
+		TransactionRole map[TransactionRole]map[TransactionRoleType][]string // group ids
 	}
 }

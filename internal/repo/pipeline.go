@@ -138,10 +138,7 @@ func (m *Manager) SyncBranchQuiet(repoName, cloneURL, branch string) (bool, erro
 
 	// Clone if not yet cached.
 	if _, err := os.Stat(filepath.Join(dest, ".git")); os.IsNotExist(err) {
-		cmd := exec.Command("git", "clone", "--depth=1", "--quiet", "--branch", branch, "--", cloneURL, dest)
-		cmd.Stdout = nil
-		cmd.Stderr = nil
-		if err := cmd.Run(); err != nil {
+		if err := gitClone("--depth=1", "--quiet", "--branch", branch, "--", cloneURL, dest); err != nil {
 			return false, fmt.Errorf("git clone %s@%s failed", repoName, branch)
 		}
 		return true, nil

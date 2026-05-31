@@ -14,6 +14,21 @@ import (
 
 var validBranchRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]*$`)
 
+// gitClone runs git clone with --filter=blob:none, falling back to a plain
+// clone if the server does not support partial clone (exit 128).
+// dest must be the last element of args.
+func gitClone(args ...string) error {
+	dest := args[len(args)-1]
+	filtered := append([]string{"clone", "--filter=blob:none"}, args...)
+	if err := exec.Command("git", filtered...).Run(); err == nil {
+		return nil
+	}
+	// Remove any partial clone left by the failed attempt before retrying.
+	_ = os.RemoveAll(dest)
+	plain := append([]string{"clone"}, args...)
+	return exec.Command("git", plain...).Run()
+}
+
 // clearStaleLocks removes lock files left by previously interrupted git operations.
 func clearStaleLocks(repoPath string) {
 	for _, lock := range []string{"shallow.lock", "index.lock"} {
@@ -56,10 +71,7 @@ func (m *Manager) syncRepo(r gitea.Repository, noFetch bool) error {
 
 	// Clone if the repo doesn't exist locally yet.
 	if _, err := os.Stat(filepath.Join(dest, ".git")); os.IsNotExist(err) {
-		cmd := exec.Command("git", "clone", "--depth=1", "--quiet", r.CloneURL, dest)
-		cmd.Stdout = nil
-		cmd.Stderr = nil
-		if err := cmd.Run(); err != nil {
+		if err := gitClone("--depth=1", "--quiet", r.CloneURL, dest); err != nil {
 			return fmt.Errorf("git clone: %w", err)
 		}
 		return nil
@@ -102,10 +114,7 @@ func (m *Manager) SyncBranch(repoName, cloneURL, branch string) (bool, error) {
 
 	// Clone if the repo doesn't exist locally yet.
 	if _, err := os.Stat(filepath.Join(dest, ".git")); os.IsNotExist(err) {
-		cmd := exec.Command("git", "clone", "--depth=1", "--quiet", "--branch", branch, "--", cloneURL, dest)
-		cmd.Stdout = nil
-		cmd.Stderr = nil
-		if err := cmd.Run(); err != nil {
+		if err := gitClone("--depth=1", "--quiet", "--branch", branch, "--", cloneURL, dest); err != nil {
 			return false, fmt.Errorf("git clone %s@%s failed", repoName, branch)
 		}
 		return true, nil
