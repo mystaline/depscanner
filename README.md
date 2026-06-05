@@ -46,7 +46,7 @@ depscanner runs natively on Windows and WSL2. Ensure the following are installed
    git --version
    ```
 
-**Cache Directory**: On Windows, depscanner stores cached repositories in `%USERPROFILE%\.depscanner\repos` by default. You can override with `--cache-dir` flag or set `cache_dir` in config.
+**Cache Directory**: On Windows, depscanner stores cached repositories in `%USERPROFILE%\.depscannerepos` by default. You can override with `--cache-dir` flag or set `cache_dir` in config.
 
 **Terminal Support**: Output works best in Windows Terminal, PowerShell 7+, or modern cmd.exe. Older cmd.exe may not display Unicode symbols correctly.
 
@@ -350,3 +350,7 @@ Tests include:
 ## License
 
 MIT
+---
+
+**[→ mystaline.dev](https://mystaline.dev)** — full portfolio & project writeups
+
