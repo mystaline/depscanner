@@ -36,6 +36,12 @@ func clearStaleLocks(repoPath string) {
 	}
 }
 
+// isShallow reports whether the repo at repoPath is a shallow clone.
+func isShallow(repoPath string) bool {
+	_, err := os.Stat(filepath.Join(repoPath, ".git", "shallow"))
+	return err == nil
+}
+
 // isValidBranchName checks that a branch name is safe to pass to git commands.
 func isValidBranchName(name string) bool {
 	return validBranchRe.MatchString(name)
@@ -86,7 +92,14 @@ func (m *Manager) syncRepo(r gitea.Repository, noFetch bool) error {
 	// origin/main while another branch is checked out causes divergence.
 	currentBranch := getCurrentBranch(dest)
 	if currentBranch != "HEAD" {
-		fetch := exec.Command("git", "-C", dest, "fetch", "--depth=1", "--quiet", "origin", currentBranch)
+		// Preserve unshallowed repos: if the repo was deepened (e.g. by
+		// impact/diff/unshallow), fetch without --depth to avoid re-shallowing
+		// which can be extremely slow on large repos.
+		fetchArgs := []string{"-C", dest, "fetch", "--quiet", "origin", currentBranch}
+		if isShallow(dest) {
+			fetchArgs = []string{"-C", dest, "fetch", "--depth=1", "--quiet", "origin", currentBranch}
+		}
+		fetch := exec.Command("git", fetchArgs...)
 		fetch.Stdout = nil
 		fetch.Stderr = nil
 		_ = fetch.Run() // best-effort
@@ -119,7 +132,12 @@ func (m *Manager) SyncBranch(repoName, cloneURL, branch string) (bool, error) {
 	}
 
 	// Fetch the specific branch.
-	fetch := exec.Command("git", "-C", dest, "fetch", "--depth=1", "--quiet", "origin", "--", branch)
+	// Preserve unshallowed repos — re-shallowing is slow and can hang.
+	fetchArgs := []string{"-C", dest, "fetch", "--quiet", "origin", "--", branch}
+	if isShallow(dest) {
+		fetchArgs = []string{"-C", dest, "fetch", "--depth=1", "--quiet", "origin", "--", branch}
+	}
+	fetch := exec.Command("git", fetchArgs...)
 	fetch.Stdout = nil
 	fetch.Stderr = nil
 	if err := fetch.Run(); err != nil {

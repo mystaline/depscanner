@@ -145,7 +145,12 @@ func (m *Manager) SyncBranchQuiet(repoName, cloneURL, branch string) (bool, erro
 	}
 
 	// Fetch specific branch.
-	fetch := exec.Command("git", "-C", dest, "fetch", "--depth=1", "--quiet", "origin", "--", branch)
+	// Preserve unshallowed repos — re-shallowing is slow and can hang.
+	fetchArgs := []string{"-C", dest, "fetch", "--quiet", "origin", "--", branch}
+	if isShallow(dest) {
+		fetchArgs = []string{"-C", dest, "fetch", "--depth=1", "--quiet", "origin", "--", branch}
+	}
+	fetch := exec.Command("git", fetchArgs...)
 	fetch.Stdout = nil
 	fetch.Stderr = nil
 	if err := fetch.Run(); err != nil {
