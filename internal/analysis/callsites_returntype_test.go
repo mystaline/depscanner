@@ -149,6 +149,32 @@ func run() {
 	}
 }
 
+func TestScanReturnTypeCallSites_MultiReturnConstructor(t *testing.T) {
+	src := `package main
+
+import "example.com/lib/pipeline"
+
+func run() {
+	pipe, err := pipeline.NewPipelineBuilderWithError()
+	if err != nil {
+		return
+	}
+	pipe.Group("x")
+}
+`
+	f, fset := parseTestFile(t, src)
+	aliasMap := map[string]string{"pipeline": "example.com/lib/pipeline"}
+	reg := testRegistry()
+	reg.Funcs["example.com/lib/pipeline.NewPipelineBuilderWithError"] = returnType{PkgPath: "example.com/lib/pipeline", TypeName: "PipelineBuilder"}
+	sites := scanReturnTypeCallSites(f, fset, "", aliasMap, reg, "Group", "")
+	if len(sites) != 1 {
+		t.Fatalf("(T, error) constructor assigned via v, err := ...; v.Method() should be detected; got %d sites: %+v", len(sites), sites)
+	}
+	if sites[0].ViaLocalVar != "pipe" {
+		t.Errorf("site = %+v", sites[0])
+	}
+}
+
 func TestScanReturnTypeCallSites_SameFunctionScopeOnly(t *testing.T) {
 	src := `package main
 

@@ -12,15 +12,15 @@ gitea:
 # Multi-org mode: replace gitea.org with gitea.orgs (per-org include/exclude are optional)
 # gitea:
 #   orgs:
-#     - name: BETS-Global-Settings
+#     - name: org-a
 #       include_repos:
-#         - ts-global-settings
-#     - name: BETS-Fixed-Asset
+#         - shared-settings
+#     - name: org-b
 #       include_repos:
-#         - fats
-#         - fats-api-template
+#         - svc-a
+#         - svc-a-template
 #       exclude_repos:
-#         - fats-old
+#         - svc-a-old
 
 # Module path of the shared library to scan for.
 target_module: "gitea.example.com/my-org/shared-lib"

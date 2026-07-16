@@ -246,6 +246,8 @@ func ScanSymbolReferences(repoDir, targetModule, symbolName string, registry Ret
 		// Local-variable and chained-call detection: does not require the
 		// DI field index, only the alias map for this file and the
 		// source module's return-type registry.
+		// c.aliasMap here is filteredAliases (qualPkg-scoped), not allAliases — fine today since
+		// the registry only tracks same-package return types; revisit if it grows cross-package tracking.
 		sites = append(sites, scanReturnTypeCallSites(f, fset2, repoDir, c.aliasMap, registry, plainFunc, qualPkg)...)
 	}
 
