@@ -72,8 +72,9 @@ func runDiff(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	// Unshallow to access full history if online.
-	if !cfg.Offline {
+	// Unshallow to access full history if online. Skip for local path sources —
+	// never run remote git operations against the user's live local checkout.
+	if !res.Local && !cfg.Offline {
 		fmt.Printf("Fetching history for %s...\n", targetRepo)
 		unshallowTargetRepo(repoPath, defaultUnshallowTimeout, cfg.UnshallowBranches)
 	}

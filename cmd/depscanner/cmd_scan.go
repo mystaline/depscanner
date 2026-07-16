@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -17,7 +16,6 @@ import (
 	"github.com/mystaline/depscanner/internal/repo"
 	"github.com/spf13/cobra"
 )
-
 
 // staleness levels for branch-aware scanning.
 const (
@@ -80,19 +78,19 @@ type repoScanResult struct {
 }
 
 type scanOutput struct {
-	Repos        []repoScanResult        `json:"repos"`
-	TargetModule string                  `json:"target_module"`
-	Sources      []string                `json:"sources,omitempty"`
-	Branch       string                  `json:"branch,omitempty"`
-	FuncNames    []string                `json:"func_names,omitempty"`
-	MethodNames  []string                `json:"method_names,omitempty"`
-	TypeNames    []string                `json:"type_names,omitempty"`
-	ConstNames   []string                `json:"const_names,omitempty"`
-	VarNames     []string                `json:"var_names,omitempty"`
-	Signatures   map[string]int          `json:"signatures,omitempty"` // funcName → param count
-	Total        int                     `json:"total"`
-	GoModCount   int                     `json:"go_mod_count"`
-	TargetCount  int                     `json:"target_count"`
+	Repos        []repoScanResult `json:"repos"`
+	TargetModule string           `json:"target_module"`
+	Sources      []string         `json:"sources,omitempty"`
+	Branch       string           `json:"branch,omitempty"`
+	FuncNames    []string         `json:"func_names,omitempty"`
+	MethodNames  []string         `json:"method_names,omitempty"`
+	TypeNames    []string         `json:"type_names,omitempty"`
+	ConstNames   []string         `json:"const_names,omitempty"`
+	VarNames     []string         `json:"var_names,omitempty"`
+	Signatures   map[string]int   `json:"signatures,omitempty"` // funcName → param count
+	Total        int              `json:"total"`
+	GoModCount   int              `json:"go_mod_count"` // unique repos with a go.mod (repo count)
+	TargetCount  int              `json:"target_count"` // (repo, source) dependency relationships, not a repo count — a repo importing 2 sources counts twice
 }
 
 func newScanCmd() *cobra.Command {
@@ -164,7 +162,8 @@ func runScan(_ *cobra.Command, _ []string) error {
 			if !cfg.Offline {
 				if _, statErr := os.Stat(targetPath); statErr != nil {
 					fmt.Printf("Syncing target module for signature check...\n")
-					_, syncErr := targetMgr.SyncBranch(targetRepo, fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo), branch)
+					syncBranch := cfg.GetBranchForRepo(targetRepo, branch)
+					_, syncErr := targetMgr.SyncBranch(targetRepo, fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo), syncBranch)
 					if syncErr != nil {
 						fmt.Fprintf(os.Stderr, "  warn: failed to sync target module: %v\n", syncErr)
 					}
@@ -194,7 +193,6 @@ func runScan(_ *cobra.Command, _ []string) error {
 	multiGroup := len(consumerSets) > 1 || len(sources) > 1
 
 	var allResults []repoScanResult
-	var totalGoMod, totalTarget int
 
 	for _, cset := range consumerSets {
 		mgr := cset.Mgr
@@ -202,31 +200,17 @@ func runScan(_ *cobra.Command, _ []string) error {
 		var (
 			mu      sync.Mutex
 			results []repoScanResult
-			seen    = map[string]bool{} // repoName → counted for go.mod once
 		)
 
 		processFn := func(r gitea.Repository, synced bool) {
 			repoPath := mgr.GetRepoPath(r.Name)
 			repoBranch := cfg.GetBranchForRepo(r.Name, branch)
-			countedGoMod := false
 			for _, src := range sources {
-				res, hasGoMod, usesTarget := scanRepoForSource(repoPath, src.module, src.name, cset.Group, r.Name, repoBranch, src.latestHash, r)
+				res, _, _ := scanRepoForSource(repoPath, src.module, src.name, cset.Group, r.Name, repoBranch, src.latestHash, r)
 				mu.Lock()
 				results = append(results, res)
-				if hasGoMod && !countedGoMod {
-					countedGoMod = true
-				}
-				if usesTarget {
-					totalTarget++
-				}
 				mu.Unlock()
 			}
-			mu.Lock()
-			if countedGoMod && !seen[r.Name] {
-				seen[r.Name] = true
-				totalGoMod++
-			}
-			mu.Unlock()
 		}
 
 		processFnWithBranch := func(r gitea.Repository, _ bool) {
@@ -253,6 +237,8 @@ func runScan(_ *cobra.Command, _ []string) error {
 		sortResults(results)
 		allResults = append(allResults, results...)
 	}
+
+	totalUsingAnySource, totalGoMod, totalTarget := countScanResults(allResults)
 
 	if format == "json" {
 		sourceNames := make([]string, len(sources))
@@ -287,8 +273,32 @@ func runScan(_ *cobra.Command, _ []string) error {
 
 	checkSigs = targetSigs
 	printGroupedResults(allResults, sources, multiGroup)
-	fmt.Printf("\nSummary: %d/%d Go repos depend on a source module\n", totalTarget, totalGoMod)
+	fmt.Printf("\nSummary: %d/%d Go repos depend on at least one source module\n", totalUsingAnySource, totalGoMod)
 	return nil
+}
+
+// countScanResults derives the three summary counts from the flat per-(repo,
+// source) result set:
+//   - totalUsingAnySource: unique repos that use at least one source
+//     (repo-count population — pairs with GoModCount for the human summary line).
+//   - totalGoMod: unique repos that have a go.mod, regardless of source usage.
+//   - totalTarget: total dependency *relationships* — one increment per
+//     (repo, source) pair that uses that source, so a repo importing two
+//     sources contributes 2. This is a different population than the repo
+//     counts above and is not meant to be read as a fraction of totalGoMod.
+func countScanResults(results []repoScanResult) (totalUsingAnySource, totalGoMod, totalTarget int) {
+	hasGoMod := map[string]bool{}
+	usesAnySource := map[string]bool{}
+	for _, r := range results {
+		if r.HasGoMod {
+			hasGoMod[r.Name] = true
+		}
+		if r.UsesTarget {
+			usesAnySource[r.Name] = true
+			totalTarget++
+		}
+	}
+	return len(usesAnySource), len(hasGoMod), totalTarget
 }
 
 // resolvedSource is a source module ready to scan against: its display name,
@@ -496,6 +506,7 @@ func printGroupedResults(allResults []repoScanResult, sources []resolvedSource, 
 
 		for _, g := range groupNames {
 			results := byGroup[g]
+			sortResults(results)
 			targetCount := 0
 			for _, r := range results {
 				if r.UsesTarget {
@@ -624,37 +635,6 @@ func statusIcon(status string) string {
 	default:
 		return "?"
 	}
-}
-
-// filterRepos applies include/exclude lists from config.
-// Both include and exclude support glob patterns (*, ?, [...]) via path.Match.
-// include is applied first (allowlist); exclude then removes matched repos.
-func filterRepos(repos []gitea.Repository, include, exclude []string) []gitea.Repository {
-	var filtered []gitea.Repository
-	for _, r := range repos {
-		if matchesAny(r.Name, exclude) {
-			continue
-		}
-		if len(include) > 0 && !matchesAny(r.Name, include) {
-			continue
-		}
-		filtered = append(filtered, r)
-	}
-	return filtered
-}
-
-// matchesAny checks if name matches any pattern in the list.
-// Supports exact match and glob patterns (*, ?, [...]).
-func matchesAny(name string, patterns []string) bool {
-	for _, p := range patterns {
-		if p == name {
-			return true
-		}
-		if matched, _ := path.Match(p, name); matched {
-			return true
-		}
-	}
-	return false
 }
 
 func printCallSites(label, name string, targetCount int, targetModule string, results []repoScanResult, sigs map[string]*analysis.FuncSignature, getSites func(repoScanResult) []callSiteResult) {
