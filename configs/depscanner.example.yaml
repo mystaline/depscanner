@@ -57,15 +57,15 @@ exclude_repos:
 # Legacy `target_module` + `gitea.org(s)` above still works and is auto-mapped.
 #
 # sources:
-#   - name: ts-utils
-#     gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: BETS-V2 }
-#     module: gitea.example.com/BETS-V2/ts-utils   # optional; read from go.mod if omitted
-#   - name: be-core-utils
-#     path: ~/Workspace/.../be-core-utils           # local checkout, used in place
+#   - name: acme-lib
+#     gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: org-a }
+#     module: gitea.example.com/org-a/acme-lib   # optional; read from go.mod if omitted
+#   - name: acme-core
+#     path: ~/Workspace/.../acme-core           # local checkout, used in place
 #
 # consumers:
-#   - gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: BETS-V2 }
-#   - gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: Wangsit-Developer, exclude_repos: [docs] }
+#   - gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: org-a }
+#   - gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: org-b, exclude_repos: [docs] }
 #   - path: ~/Workspace/.../some-service
 #
-# diff/impact select one source:  depscanner diff --source ts-utils <from> <to>
+# diff/impact select one source:  depscanner diff --source acme-lib <from> <to>
