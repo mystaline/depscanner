@@ -21,7 +21,7 @@ func writeTempFile(t *testing.T, dir, name, content string) {
 
 func mustScan(t *testing.T, dir, module, symbol string) []CallSite {
 	t.Helper()
-	sites, warnings, err := ScanSymbolReferences(dir, module, symbol)
+	sites, warnings, err := ScanSymbolReferences(dir, module, symbol, ReturnTypeRegistry{})
 	if err != nil {
 		t.Fatalf("ScanSymbolReferences(%q): %v", symbol, err)
 	}
@@ -253,7 +253,7 @@ func fromOtherFile() {
 
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			sites, warnings, err := ScanSymbolReferences(dir, target, tt.funcName)
+			sites, warnings, err := ScanSymbolReferences(dir, target, tt.funcName, ReturnTypeRegistry{})
 			if err != nil {
 				t.Fatalf("ScanSymbolReferences(%q): %v", tt.funcName, err)
 			}
@@ -732,7 +732,7 @@ func (u *CreateUsecase) Execute() {
 	// SplitSymbolKey("example.com/org/lib/service.SchedulerService.Schedule")
 	// → pkg="example.com/org/lib/service", name="SchedulerService.Schedule"
 	// target = "service.SchedulerService.Schedule"
-	sites, _, err := ScanSymbolReferences(dir, module, "service.SchedulerService.Schedule")
+	sites, _, err := ScanSymbolReferences(dir, module, "service.SchedulerService.Schedule", ReturnTypeRegistry{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -99,6 +99,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	newIndex, _ := analysis.BuildSymbolIndex(targetRepoPath, targetModule)
+	registry := analysis.BuildReturnTypeRegistry(newIndex)
 
 	changes := analysis.DiffSymbols(oldIndex, newIndex)
 	var interesting []analysis.SymbolChange
@@ -177,7 +178,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 
 		var allSites []analysis.CallSite
 		for _, target := range symbolTargets {
-			sites, _, _ := analysis.ScanSymbolReferences(repoPath, targetModule, target)
+			sites, _, _ := analysis.ScanSymbolReferences(repoPath, targetModule, target, registry)
 			allSites = append(allSites, sites...)
 		}
 

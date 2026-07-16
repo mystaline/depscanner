@@ -312,3 +312,59 @@ func extractFieldList(fset *token.FileSet, fl *ast.FieldList) ([]ParamInfo, bool
 	}
 	return params, variadic
 }
+
+// returnType records the package and declared type name a constructor or
+// method returns, when that type is declared in the same package.
+type returnType struct {
+	PkgPath  string
+	TypeName string
+}
+
+// ReturnTypeRegistry maps constructors and methods to the target-module type
+// they return, derived from a SymbolIndex. Used to resolve "what type does
+// this expression evaluate to" for local-variable and fluent-chain call-site
+// detection — see BuildReturnTypeRegistry.
+type ReturnTypeRegistry struct {
+	// Funcs maps "pkgPath.FuncName" -> returnType for package-level functions
+	// returning a type declared in the same package.
+	Funcs map[string]returnType
+	// Methods maps "pkgPath.ReceiverType.MethodName" -> returnType for methods
+	// returning a type declared in the same package as the receiver.
+	Methods map[string]returnType
+}
+
+// BuildReturnTypeRegistry derives constructor/method return-type mappings
+// from an already-built SymbolIndex (see BuildSymbolIndex). Only functions
+// and methods whose first return value names a type declared in the same
+// package are recorded. This covers both single-value returns
+// (func NewX() *X) and the common (T, error) constructor shape, since only
+// the first return value is considered.
+func BuildReturnTypeRegistry(idx SymbolIndex) ReturnTypeRegistry {
+	reg := ReturnTypeRegistry{
+		Funcs:   make(map[string]returnType),
+		Methods: make(map[string]returnType),
+	}
+	for _, sym := range idx {
+		if sym.Kind != KindFunc && sym.Kind != KindMethod {
+			continue
+		}
+		if len(sym.Returns) == 0 {
+			continue
+		}
+		retType := strings.TrimPrefix(sym.Returns[0].Type, "*")
+		typeKey := sym.Package + "." + retType
+		if _, declared := idx[typeKey]; !declared {
+			// Return type isn't a symbol declared in the same package (e.g.
+			// a builtin, an error, or a type from another package) — skip.
+			continue
+		}
+		rt := returnType{PkgPath: sym.Package, TypeName: retType}
+		switch sym.Kind {
+		case KindFunc:
+			reg.Funcs[sym.Package+"."+sym.Name] = rt
+		case KindMethod:
+			reg.Methods[sym.Package+"."+sym.Receiver+"."+sym.Name] = rt
+		}
+	}
+	return reg
+}

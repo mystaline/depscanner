@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mystaline/depscanner/internal/analysis"
 	"github.com/mystaline/depscanner/internal/config"
 	"github.com/mystaline/depscanner/internal/gitea"
 	"github.com/mystaline/depscanner/internal/repo"
@@ -96,7 +97,7 @@ func main() { helper.Must(nil) }
 	t.Cleanup(func() { funcNames = nil })
 
 	repoPath := cset.Mgr.GetRepoPath("svc-a")
-	res, hasGoMod, usesTarget := scanRepoForSource(repoPath, "example.com/org/acme-lib", "acme-lib", cset.Group, "svc-a", "main", "", cset.Repos[0])
+	res, hasGoMod, usesTarget := scanRepoForSource(repoPath, "example.com/org/acme-lib", "acme-lib", cset.Group, "svc-a", "main", "", cset.Repos[0], analysis.ReturnTypeRegistry{})
 	if !hasGoMod || !usesTarget {
 		t.Fatalf("expected svc-a to use acme-lib: hasGoMod=%v usesTarget=%v", hasGoMod, usesTarget)
 	}
