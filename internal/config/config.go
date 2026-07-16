@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +73,65 @@ func (p Provider) Location() (string, error) {
 		return "", fmt.Errorf("provider %q must set exactly one of gitea/git/path (found %d)", p.Name, n)
 	}
 	return kind, nil
+}
+
+// ParseGitURL extracts host, owner, and repo (without .git) from an https or
+// scp-style git URL.
+func ParseGitURL(raw string) (host, owner, repo string, err error) {
+	s := strings.TrimSuffix(raw, ".git")
+	// scp-style: git@host:owner/repo
+	if strings.HasPrefix(s, "git@") {
+		s = strings.TrimPrefix(s, "git@")
+		hostPart, rest, ok := strings.Cut(s, ":")
+		if !ok {
+			return "", "", "", fmt.Errorf("invalid git url: %s", raw)
+		}
+		host = hostPart
+		owner, repo = splitLastTwo(rest)
+	} else {
+		u, perr := url.Parse(s)
+		if perr != nil || u.Host == "" {
+			return "", "", "", fmt.Errorf("invalid git url: %s", raw)
+		}
+		host = u.Host
+		owner, repo = splitLastTwo(strings.Trim(u.Path, "/"))
+	}
+	if owner == "" || repo == "" {
+		return "", "", "", fmt.Errorf("git url missing owner/repo: %s", raw)
+	}
+	return host, owner, repo, nil
+}
+
+// splitLastTwo returns the last two path segments of p (owner, repo).
+func splitLastTwo(p string) (owner, repo string) {
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if len(parts) < 2 {
+		return "", ""
+	}
+	return parts[len(parts)-2], parts[len(parts)-1]
+}
+
+// Group returns the classification label for a provider.
+func (p Provider) Group() (string, error) {
+	if p.Name != "" {
+		return p.Name, nil
+	}
+	kind, err := p.Location()
+	if err != nil {
+		return "", err
+	}
+	switch kind {
+	case "gitea":
+		return p.Gitea.Org, nil
+	case "git":
+		host, owner, _, perr := ParseGitURL(p.Git)
+		if perr != nil {
+			return "", perr
+		}
+		return host + "-" + owner, nil
+	default: // path
+		return filepath.Base(strings.TrimRight(p.Path, "/")), nil
+	}
 }
 
 // Config holds all runtime configuration for depscanner.
