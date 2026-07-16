@@ -21,17 +21,17 @@ func TestLegacyConfigNormalizes(t *testing.T) {
 gitea:
   url: https://gitea.example.com
   token: t
-  org: BETS-V2
-target_module: gitea.example.com/BETS-V2/ts-utils
+  org: org-a
+target_module: gitea.example.com/org-a/acme-lib
 `)
 	cfg, err := Load(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Sources) != 1 || cfg.Sources[0].Module != "gitea.example.com/BETS-V2/ts-utils" {
+	if len(cfg.Sources) != 1 || cfg.Sources[0].Module != "gitea.example.com/org-a/acme-lib" {
 		t.Fatalf("sources = %+v", cfg.Sources)
 	}
-	if len(cfg.Consumers) != 1 || cfg.Consumers[0].Gitea == nil || cfg.Consumers[0].Gitea.Org != "BETS-V2" {
+	if len(cfg.Consumers) != 1 || cfg.Consumers[0].Gitea == nil || cfg.Consumers[0].Gitea.Org != "org-a" {
 		t.Fatalf("consumers = %+v", cfg.Consumers)
 	}
 	if err := cfg.Validate(); err != nil {

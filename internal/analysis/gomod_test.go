@@ -140,14 +140,14 @@ func TestParseGoModFileNotFound(t *testing.T) {
 func TestReadModulePath(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "go.mod")
-	if err := os.WriteFile(p, []byte("module gitea.example.com/BETS-V2/ts-utils\n\ngo 1.22\n"), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte("module gitea.example.com/org-a/acme-lib\n\ngo 1.22\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got, err := ReadModulePath(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "gitea.example.com/BETS-V2/ts-utils" {
+	if got != "gitea.example.com/org-a/acme-lib" {
 		t.Fatalf("got %q", got)
 	}
 }
