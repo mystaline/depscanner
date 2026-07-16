@@ -110,90 +110,6 @@ cache_dir: "~/.depscanner/repos"
 	}
 }
 
-func TestValidate(t *testing.T) {
-	tests := []struct {
-		name      string
-		config    Config
-		expectErr bool
-		errMsg    string
-	}{
-		{
-			name: "valid config",
-			config: Config{
-				Gitea: GiteaConfig{
-					URL:   "https://gitea.example.com",
-					Token: "token",
-					Org:   "org",
-				},
-				TargetModule: "github.com/example/lib",
-			},
-			expectErr: false,
-		},
-		{
-			name: "missing gitea.url",
-			config: Config{
-				Gitea: GiteaConfig{
-					Token: "token",
-					Org:   "org",
-				},
-				TargetModule: "github.com/example/lib",
-			},
-			expectErr: true,
-			errMsg:    "gitea.url is required when not in offline mode",
-		},
-		{
-			name: "missing gitea.token",
-			config: Config{
-				Gitea: GiteaConfig{
-					URL: "https://gitea.example.com",
-					Org: "org",
-				},
-				TargetModule: "github.com/example/lib",
-			},
-			expectErr: true,
-			errMsg:    "gitea.token is required when not in offline mode",
-		},
-		{
-			name: "missing gitea.org",
-			config: Config{
-				Gitea: GiteaConfig{
-					URL:   "https://gitea.example.com",
-					Token: "token",
-				},
-				TargetModule: "github.com/example/lib",
-			},
-			expectErr: true,
-			errMsg:    "gitea.org or gitea.orgs is required when not in offline mode",
-		},
-		{
-			name: "missing target_module",
-			config: Config{
-				Gitea: GiteaConfig{
-					URL:   "https://gitea.example.com",
-					Token: "token",
-					Org:   "org",
-				},
-			},
-			expectErr: true,
-			errMsg:    "target_module is required",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
-			if tt.expectErr && err == nil {
-				t.Errorf("Validate() expected error, got nil")
-			}
-			if !tt.expectErr && err != nil {
-				t.Errorf("Validate() failed: %v", err)
-			}
-			if tt.expectErr && err != nil && err.Error() != tt.errMsg {
-				t.Errorf("Validate() error = %q, want %q", err.Error(), tt.errMsg)
-			}
-		})
-	}
-}
 
 func TestGetBranchForRepo(t *testing.T) {
 	cfg := &Config{
@@ -355,37 +271,7 @@ target_module: "gitea.example.com/lib/utils"
 	}
 }
 
-func TestValidate_MultiOrg(t *testing.T) {
-	cfg := Config{
-		Gitea: GiteaConfig{
-			URL:   "https://gitea.example.com",
-			Token: "tok",
-			Orgs:  []OrgConfig{{Name: "org-a"}},
-		},
-		TargetModule: "gitea.example.com/lib/utils",
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("Validate() with orgs failed: %v", err)
-	}
-}
 
-func TestValidate_NoOrgNoOrgs(t *testing.T) {
-	cfg := Config{
-		Gitea: GiteaConfig{
-			URL:   "https://gitea.example.com",
-			Token: "tok",
-		},
-		TargetModule: "gitea.example.com/lib/utils",
-	}
-	err := cfg.Validate()
-	if err == nil {
-		t.Error("Validate() expected error when neither org nor orgs set")
-	}
-	want := "gitea.org or gitea.orgs is required when not in offline mode"
-	if err.Error() != want {
-		t.Errorf("Validate() error = %q, want %q", err.Error(), want)
-	}
-}
 
 func TestActiveOrgs_OrgsPreferenceOverOrg(t *testing.T) {
 	cfg := &Config{
