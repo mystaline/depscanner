@@ -136,17 +136,17 @@ func (p Provider) Group() (string, error) {
 
 // Config holds all runtime configuration for depscanner.
 type Config struct {
-	Gitea           GiteaConfig       `yaml:"gitea"`
-	TargetModule    string            `yaml:"target_module"`
-	CacheDir        string            `yaml:"cache_dir"`
-	IncludeRepos    []string          `yaml:"include_repos"`
-	ExcludeRepos    []string          `yaml:"exclude_repos"`
+	Gitea             GiteaConfig       `yaml:"gitea"`
+	TargetModule      string            `yaml:"target_module"`
+	CacheDir          string            `yaml:"cache_dir"`
+	IncludeRepos      []string          `yaml:"include_repos"`
+	ExcludeRepos      []string          `yaml:"exclude_repos"`
 	DefaultBranch     string            `yaml:"default_branch"`
 	BranchTracking    map[string]string `yaml:"branch_tracking"`
 	UnshallowBranches []string          `yaml:"unshallow_branches"`
-	Offline         bool              `yaml:"offline"`
-	Sources         []Source          `yaml:"sources"`
-	Consumers       []Provider        `yaml:"consumers"`
+	Offline           bool              `yaml:"offline"`
+	Sources           []Source          `yaml:"sources"`
+	Consumers         []Provider        `yaml:"consumers"`
 }
 
 // Validate checks that all required fields are present.
@@ -297,6 +297,7 @@ func expandHome(path string) (string, error) {
 	}
 	return path, nil
 }
+
 // GetBranchForRepo determines the correct branch to sync for a given repository
 // based on the global branch flag, branch tracking configuration, and defaults.
 func (c *Config) GetBranchForRepo(repoName string, branchFlag string) string {
