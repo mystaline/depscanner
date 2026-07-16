@@ -732,13 +732,6 @@ func scanReturnTypeCallSites(f *ast.File, fset *token.FileSet, repoDir string, a
 				if !ok {
 					return true
 				}
-				// methodName must itself be a registered method on the
-				// resolved receiver type — a call to an unregistered method
-				// (e.g. one that doesn't return a target-module type) is not
-				// a match, even though the receiver's own type is known.
-				if _, registered := registry.Methods[rt.PkgPath+"."+rt.TypeName+"."+methodName]; !registered {
-					return true
-				}
 				if typeQualifier != "" && !matchesQualifier(rt.PkgPath, rt.TypeName, typeQualifier) {
 					return true
 				}

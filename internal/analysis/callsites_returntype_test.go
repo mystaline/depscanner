@@ -84,17 +84,45 @@ func TestScanReturnTypeCallSites_ChainBreaksOnNonTargetType(t *testing.T) {
 import "example.com/lib/pipeline"
 
 func run() {
-	b := pipeline.NewPipelineBuilder().Group("x")
-	_ = b.Error()
+	pipeline.NewPipelineBuilder().Build().SomeMethod()
 }
 `
 	f, fset := parseTestFile(t, src)
 	aliasMap := map[string]string{"pipeline": "example.com/lib/pipeline"}
-	// "Build" is not in the registry (returns string, not PipelineBuilder) —
-	// searching for a method not in the registry must not match.
-	sites := scanReturnTypeCallSites(f, fset, "", aliasMap, testRegistry(), "Error", "")
+	// Build() returns string, not a target type, and is not in the test
+	// registry — resolveExprReturnType can't continue past it, so a search
+	// for SomeMethod (called on Build()'s return value) must find nothing:
+	// the chain is genuinely broken at that point, not merely "the searched
+	// method isn't chain-capable."
+	sites := scanReturnTypeCallSites(f, fset, "", aliasMap, testRegistry(), "SomeMethod", "")
 	if len(sites) != 0 {
-		t.Fatalf("Error() is not a registered PipelineBuilder method, got %d sites: %+v", len(sites), sites)
+		t.Fatalf("chain should break at Build() (unregistered, non-target return type); got %d sites: %+v", len(sites), sites)
+	}
+}
+
+func TestScanReturnTypeCallSites_TerminalMethodNotInRegistry(t *testing.T) {
+	src := `package main
+
+import "example.com/lib/pipeline"
+
+func run() {
+	pipe := pipeline.NewPipelineBuilder()
+	pipe.Build()
+}
+`
+	f, fset := parseTestFile(t, src)
+	aliasMap := map[string]string{"pipeline": "example.com/lib/pipeline"}
+	// Build is deliberately not in testRegistry().Methods (it returns string,
+	// not a target type) — but pipe's OWN type (PipelineBuilder) is known, so
+	// a direct call to any method name on pipe must still be detected,
+	// matching scanDICallSites/scanParamCallSites parity (they don't require
+	// the called method to be independently registered either).
+	sites := scanReturnTypeCallSites(f, fset, "", aliasMap, testRegistry(), "Build", "")
+	if len(sites) != 1 {
+		t.Fatalf("terminal call to a non-chain-capable method on a known local var should be detected; got %d sites: %+v", len(sites), sites)
+	}
+	if sites[0].ViaLocalVar != "pipe" {
+		t.Errorf("site = %+v", sites[0])
 	}
 }
 
