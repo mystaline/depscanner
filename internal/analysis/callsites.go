@@ -22,6 +22,15 @@ type CallSite struct {
 	// e.g. u.SchedulerService.Schedule(...) sets ViaField="SchedulerService"
 	ViaField     string
 	ViaFieldType string // fully qualified, e.g. "github.com/org/lib/service.SchedulerService"
+
+	// Set when the call was detected via a local variable assigned from a
+	// target-module constructor/method call, or via a fluent call chain
+	// rooted at one. e.g. `pipe := pipeline.NewPipelineBuilder(); pipe.Group(...)`
+	// sets ViaLocalVar="pipe"; a chain like
+	// `pipeline.NewPipelineBuilder().Group(...)` has no variable, so
+	// ViaLocalVar="" but ViaLocalVarType is still populated.
+	ViaLocalVar     string
+	ViaLocalVarType string // fully qualified, e.g. "github.com/org/lib/pipeline.PipelineBuilder"
 }
 
 // diFieldEntry records that a named struct field has a type originating from the target module.
@@ -525,19 +534,26 @@ func scanDICallSites(f *ast.File, fset *token.FileSet, repoDir string, diFieldIn
 //   - "service"               → match by last path segment of import path
 //   - "service.SchedulerService" → match by both (composite form from impact command)
 func matchesDIQualifier(entry diFieldEntry, typeQualifier string) bool {
-	pkgSuffix := entry.importPath
+	return matchesQualifier(entry.importPath, entry.typeName, typeQualifier)
+}
+
+// matchesQualifier reports whether (importPath, typeName) satisfies typeQualifier.
+// Handles three qualifier forms:
+//   - "SchedulerService"         → match by type name
+//   - "service"               → match by last path segment of import path
+//   - "service.SchedulerService" → match by both (composite form)
+func matchesQualifier(importPath, typeName, typeQualifier string) bool {
+	pkgSuffix := importPath
 	if idx := strings.LastIndex(pkgSuffix, "/"); idx >= 0 {
 		pkgSuffix = pkgSuffix[idx+1:]
 	}
-	// Simple: type name or package segment match
-	if entry.typeName == typeQualifier || pkgSuffix == typeQualifier {
+	if typeName == typeQualifier || pkgSuffix == typeQualifier {
 		return true
 	}
-	// Composite "pkgseg.TypeName": split at last dot
 	if dotIdx := strings.LastIndex(typeQualifier, "."); dotIdx >= 0 {
 		qualPkgSeg := typeQualifier[:dotIdx]
 		qualType := typeQualifier[dotIdx+1:]
-		return pkgSuffix == qualPkgSeg && entry.typeName == qualType
+		return pkgSuffix == qualPkgSeg && typeName == qualType
 	}
 	return false
 }
@@ -617,6 +633,188 @@ func matchIdent(id *ast.Ident, aliasMap map[string]string, symbolName string) (s
 		return "", ""
 	}
 	return importPath + "." + id.Name, id.Name
+}
+
+// resolveExprReturnType attempts to determine which target-module type a Go
+// expression evaluates to, using the return-type registry and a
+// function-scoped local-variable index. Handles three forms:
+//   - pkg.NewX(...)      — direct constructor call, resolved via aliasMap + registry.Funcs
+//   - knownVar           — a local variable already present in localTypes
+//   - <expr>.Method(...) — recurses on <expr>, then looks up Method in
+//     registry.Methods for <expr>'s resolved type
+//
+// Returns ok=false when the expression's type can't be determined via this
+// heuristic (not a call/ident, or resolves outside the target module).
+func resolveExprReturnType(expr ast.Expr, aliasMap map[string]string, registry ReturnTypeRegistry, localTypes map[string]returnType) (returnType, bool) {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		rt, ok := localTypes[e.Name]
+		return rt, ok
+
+	case *ast.CallExpr:
+		sel, ok := e.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return returnType{}, false
+		}
+		// Direct constructor call: pkg.NewX(...) where X.Sel is a package alias.
+		if pkgIdent, ok := sel.X.(*ast.Ident); ok {
+			if importPath, isTarget := aliasMap[pkgIdent.Name]; isTarget {
+				if rt, found := registry.Funcs[importPath+"."+sel.Sel.Name]; found {
+					return rt, true
+				}
+				// pkgIdent matched an import alias but not a known constructor —
+				// don't fall through to treating it as a local var too.
+				return returnType{}, false
+			}
+		}
+		// Method/chain call: <expr>.Method(...) — resolve <expr>'s type first.
+		recvType, ok := resolveExprReturnType(sel.X, aliasMap, registry, localTypes)
+		if !ok {
+			return returnType{}, false
+		}
+		if rt, found := registry.Methods[recvType.PkgPath+"."+recvType.TypeName+"."+sel.Sel.Name]; found {
+			return rt, true
+		}
+		return returnType{}, false
+
+	default:
+		return returnType{}, false
+	}
+}
+
+// scanReturnTypeCallSites walks each top-level function declaration in f,
+// tracking local variables assigned from a target-module constructor/method
+// call, and reports every call to methodName made on a value whose type
+// resolves (via aliasMap + registry + the function's own assignments) to a
+// target-module type. Covers both `v := pkg.NewX(); v.M()` and fluent chains
+// `pkg.NewX().M1().M2()` with no intermediate variable — both route through
+// resolveExprReturnType. Scope is strictly same-function: each function body
+// (including nested function literals) gets its own fresh local-variable index.
+func scanReturnTypeCallSites(f *ast.File, fset *token.FileSet, repoDir string, aliasMap map[string]string, registry ReturnTypeRegistry, methodName, typeQualifier string) []CallSite {
+	var sites []CallSite
+
+	var walkBody func(body *ast.BlockStmt)
+	walkBody = func(body *ast.BlockStmt) {
+		if body == nil {
+			return
+		}
+		localTypes := make(map[string]returnType)
+		ast.Inspect(body, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.FuncLit:
+				// Nested function literal gets its own scope — its
+				// assignments must not leak into the enclosing function's
+				// index, and vice versa.
+				walkBody(node.Body)
+				return false
+
+			case *ast.AssignStmt:
+				assignPairs(node, func(lhsIdent *ast.Ident, rhs ast.Expr) {
+					call, ok := rhs.(*ast.CallExpr)
+					if !ok {
+						delete(localTypes, lhsIdent.Name)
+						return
+					}
+					if rt, ok := resolveExprReturnType(call, aliasMap, registry, localTypes); ok {
+						localTypes[lhsIdent.Name] = rt
+					} else {
+						delete(localTypes, lhsIdent.Name)
+					}
+				})
+				return true
+
+			case *ast.CallExpr:
+				sel, ok := node.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != methodName {
+					return true
+				}
+				rt, ok := resolveExprReturnType(sel.X, aliasMap, registry, localTypes)
+				if !ok {
+					return true
+				}
+				// methodName must itself be a registered method on the
+				// resolved receiver type — a call to an unregistered method
+				// (e.g. one that doesn't return a target-module type) is not
+				// a match, even though the receiver's own type is known.
+				if _, registered := registry.Methods[rt.PkgPath+"."+rt.TypeName+"."+methodName]; !registered {
+					return true
+				}
+				if typeQualifier != "" && !matchesQualifier(rt.PkgPath, rt.TypeName, typeQualifier) {
+					return true
+				}
+				pos := fset.Position(node.Pos())
+				relPath, relErr := filepath.Rel(repoDir, pos.Filename)
+				if relErr != nil {
+					relPath = pos.Filename
+				}
+				viaVar := ""
+				if ident, isIdent := sel.X.(*ast.Ident); isIdent {
+					if _, known := localTypes[ident.Name]; known {
+						viaVar = ident.Name
+					}
+				}
+				sites = append(sites, CallSite{
+					File:            filepath.ToSlash(relPath),
+					Line:            pos.Line,
+					Column:          pos.Column,
+					FuncName:        rt.PkgPath + "." + methodName,
+					RawName:         exprToStringShallow(sel.X) + "." + methodName,
+					ArgCount:        len(node.Args),
+					ViaLocalVar:     viaVar,
+					ViaLocalVarType: rt.PkgPath + "." + rt.TypeName,
+				})
+			}
+			return true
+		})
+	}
+
+	ast.Inspect(f, func(n ast.Node) bool {
+		if fn, ok := n.(*ast.FuncDecl); ok {
+			walkBody(fn.Body)
+			return false
+		}
+		return true
+	})
+
+	return sites
+}
+
+// assignPairs invokes fn for each (identifier, rhs-expression) pair in an
+// AssignStmt, handling both `v := f()` / `v, err := f()` (single call,
+// possibly multi-value — only the first lhs is paired with the call) and
+// `a, b := f(), g()` (parallel single-value assignment). The blank
+// identifier `_` is skipped.
+func assignPairs(node *ast.AssignStmt, fn func(lhsIdent *ast.Ident, rhs ast.Expr)) {
+	if len(node.Rhs) == 1 && len(node.Lhs) >= 1 {
+		if lhsIdent, ok := node.Lhs[0].(*ast.Ident); ok && lhsIdent.Name != "_" {
+			fn(lhsIdent, node.Rhs[0])
+		}
+		return
+	}
+	for i, rhs := range node.Rhs {
+		if i >= len(node.Lhs) {
+			break
+		}
+		lhsIdent, ok := node.Lhs[i].(*ast.Ident)
+		if !ok || lhsIdent.Name == "_" {
+			continue
+		}
+		fn(lhsIdent, rhs)
+	}
+}
+
+// exprToStringShallow renders a simple expression (Ident or CallExpr chain)
+// for RawName purposes without pulling in the full go/printer machinery.
+func exprToStringShallow(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.CallExpr:
+		if sel, ok := e.Fun.(*ast.SelectorExpr); ok {
+			return exprToStringShallow(sel.X) + "." + sel.Sel.Name + "(...)"
+		}
+	}
+	return "?"
 }
 
 // splitQualifiedName splits "helper.Must" into ("helper", "Must")
