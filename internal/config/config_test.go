@@ -110,13 +110,12 @@ cache_dir: "~/.depscanner/repos"
 	}
 }
 
-
 func TestGetBranchForRepo(t *testing.T) {
 	cfg := &Config{
 		DefaultBranch: "main",
 		BranchTracking: map[string]string{
-			"dev":        "develop",
-			"staging":    "staging",
+			"dev":              "develop",
+			"staging":          "staging",
 			"service-a:custom": "service-a-custom",
 		},
 	}
@@ -168,7 +167,6 @@ func TestGetBranchForRepo(t *testing.T) {
 		})
 	}
 }
-
 
 func TestActiveOrgs_MultiOrg(t *testing.T) {
 	cfg := &Config{
@@ -270,8 +268,6 @@ target_module: "gitea.example.com/lib/utils"
 		t.Errorf("Orgs[1].ExcludeRepos = %v, want [old]", cfg.Gitea.Orgs[1].ExcludeRepos)
 	}
 }
-
-
 
 func TestActiveOrgs_OrgsPreferenceOverOrg(t *testing.T) {
 	cfg := &Config{
