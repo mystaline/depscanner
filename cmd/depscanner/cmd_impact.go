@@ -177,7 +177,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 
 		var allSites []analysis.CallSite
 		for _, target := range symbolTargets {
-			sites, _, _ := analysis.ScanSymbolReferences(repoPath, targetModule, target)
+			sites, _, _ := analysis.ScanSymbolReferences(repoPath, targetModule, target, analysis.ReturnTypeRegistry{})
 			allSites = append(allSites, sites...)
 		}
 

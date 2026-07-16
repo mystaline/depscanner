@@ -428,7 +428,7 @@ func scanRepoForSource(repoPath, moduleParam, sourceName, group, repoName, repoB
 func collectCallSites(repoPath, moduleParam string, names []string, repoName string) []callSiteResult {
 	var out []callSiteResult
 	for _, name := range names {
-		sites, warnings, err := analysis.ScanSymbolReferences(repoPath, moduleParam, name)
+		sites, warnings, err := analysis.ScanSymbolReferences(repoPath, moduleParam, name, analysis.ReturnTypeRegistry{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  warn: scan %s in %s: %v\n", name, repoName, err)
 		}
@@ -445,7 +445,7 @@ func collectCallSites(repoPath, moduleParam string, names []string, repoName str
 func collectSymbolRefs(repoPath, moduleParam string, names []string, repoName string) []symbolRefResult {
 	var out []symbolRefResult
 	for _, name := range names {
-		sites, warnings, err := analysis.ScanSymbolReferences(repoPath, moduleParam, name)
+		sites, warnings, err := analysis.ScanSymbolReferences(repoPath, moduleParam, name, analysis.ReturnTypeRegistry{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  warn: scan %s in %s: %v\n", name, repoName, err)
 		}

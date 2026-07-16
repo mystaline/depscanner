@@ -52,7 +52,7 @@ type diFieldEntry struct {
 //
 // The returned warnings list contains diagnostics for files that passed the
 // import-only parse but failed full AST parse (likely syntax errors).
-func ScanSymbolReferences(repoDir, targetModule, symbolName string) ([]CallSite, []string, error) {
+func ScanSymbolReferences(repoDir, targetModule, symbolName string, registry ReturnTypeRegistry) ([]CallSite, []string, error) {
 	qualPkg, plainFunc := splitQualifiedName(symbolName)
 	if plainFunc == "" {
 		return nil, nil, fmt.Errorf("invalid symbol name %q: missing name component", symbolName)
@@ -242,13 +242,18 @@ func ScanSymbolReferences(repoDir, targetModule, symbolName string) ([]CallSite,
 			sites = append(sites, scanDICallSites(f, fset2, repoDir, diFieldIndex, plainFunc, qualPkg)...)
 			sites = append(sites, scanParamCallSites(f, fset2, repoDir, diFieldIndex, plainFunc, qualPkg)...)
 		}
+
+		// Local-variable and chained-call detection: does not require the
+		// DI field index, only the alias map for this file and the
+		// source module's return-type registry.
+		sites = append(sites, scanReturnTypeCallSites(f, fset2, repoDir, c.aliasMap, registry, plainFunc, qualPkg)...)
 	}
 
 	// Pass 3: scan sibling files (same dirs as DI candidates, not yet scanned) for DI calls.
 	// These files don't import the target module directly but may call methods on DI fields.
 	// Uses diCandidateDirs (not candidateDirs) so type-qualifier searches like
 	// "SchedulerService.Schedule" still find callers even when no direct-call candidates exist.
-	if len(diFieldIndex) > 0 {
+	if len(diFieldIndex) > 0 || len(registry.Funcs) > 0 || len(registry.Methods) > 0 {
 		fset3 := token.NewFileSet()
 		if walkErr := WalkGoFiles(repoDir, func(path string) error {
 			if scannedInPass2[path] {
@@ -262,8 +267,18 @@ func ScanSymbolReferences(repoDir, targetModule, symbolName string) ([]CallSite,
 				parseWarnings = append(parseWarnings, fmt.Sprintf("%s: %v", path, parseErr))
 				return nil
 			}
-			sites = append(sites, scanDICallSites(f, fset3, repoDir, diFieldIndex, plainFunc, qualPkg)...)
-			sites = append(sites, scanParamCallSites(f, fset3, repoDir, diFieldIndex, plainFunc, qualPkg)...)
+			if len(diFieldIndex) > 0 {
+				sites = append(sites, scanDICallSites(f, fset3, repoDir, diFieldIndex, plainFunc, qualPkg)...)
+				sites = append(sites, scanParamCallSites(f, fset3, repoDir, diFieldIndex, plainFunc, qualPkg)...)
+			}
+			// Need this file's own alias map for the registry-based scan —
+			// diCandidates was built with allAliases per file in Pass 1; find it.
+			for _, c := range diCandidates {
+				if c.path == path {
+					sites = append(sites, scanReturnTypeCallSites(f, fset3, repoDir, c.aliasMap, registry, plainFunc, qualPkg)...)
+					break
+				}
+			}
 			return nil
 		}); walkErr != nil {
 			parseWarnings = append(parseWarnings, fmt.Sprintf("pass3 walk: %v", walkErr))
@@ -279,16 +294,17 @@ func ScanSymbolReferences(repoDir, targetModule, symbolName string) ([]CallSite,
 }
 
 // deduplicateSites removes duplicate CallSites at the same (File, Line, Column).
-// When a DI site and a plain site share a position, the DI site (ViaField != "") is kept.
+// When a tagged site (DI or local-var/chain) and an untagged site share a
+// position, the tagged site is kept.
 func deduplicateSites(sites []CallSite) []CallSite {
 	type key struct{ file string; line, col int }
 	seen := make(map[key]int, len(sites)) // key → index in result
 	result := make([]CallSite, 0, len(sites))
+	tagged := func(s CallSite) bool { return s.ViaField != "" || s.ViaLocalVar != "" || s.ViaLocalVarType != "" }
 	for _, s := range sites {
 		k := key{s.File, s.Line, s.Column}
 		if idx, dup := seen[k]; dup {
-			// Prefer DI site over plain site at the same position.
-			if s.ViaField != "" && result[idx].ViaField == "" {
+			if tagged(s) && !tagged(result[idx]) {
 				result[idx] = s
 			}
 			continue
