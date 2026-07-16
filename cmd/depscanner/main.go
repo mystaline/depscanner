@@ -19,6 +19,7 @@ var (
 	format      string
 	noFetch     bool
 	branch      string
+	sourceFlag  string
 	packages    bool
 	funcNames   []string
 	methodNames []string
@@ -45,8 +46,15 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&branch, "branch", "", "scan repositories on a specific branch")
 
 	rootCmd.AddCommand(newScanCmd())
-	rootCmd.AddCommand(newDiffCmd())
-	rootCmd.AddCommand(newImpactCmd())
+
+	newDiff := newDiffCmd()
+	newDiff.Flags().StringVar(&sourceFlag, "source", "", "source module to analyze (required when multiple sources are configured)")
+	rootCmd.AddCommand(newDiff)
+
+	newImpact := newImpactCmd()
+	newImpact.Flags().StringVar(&sourceFlag, "source", "", "source module to analyze (required when multiple sources are configured)")
+	rootCmd.AddCommand(newImpact)
+
 	rootCmd.AddCommand(newUnshallowCmd())
 }
 
