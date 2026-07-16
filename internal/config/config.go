@@ -26,6 +26,54 @@ type GiteaConfig struct {
 	Orgs  []OrgConfig `yaml:"orgs"`
 }
 
+// GiteaProvider is a Gitea-org location: repos are auto-discovered via the API.
+type GiteaProvider struct {
+	URL          string   `yaml:"url"`
+	Token        string   `yaml:"token"`
+	Org          string   `yaml:"org"`
+	IncludeRepos []string `yaml:"include_repos"`
+	ExcludeRepos []string `yaml:"exclude_repos"`
+}
+
+// Provider is one location for a source or consumer: exactly one of
+// Gitea (org auto-discovery), Git (clone URL), or Path (local checkout).
+type Provider struct {
+	Name  string         `yaml:"name"`
+	Gitea *GiteaProvider `yaml:"gitea"`
+	Git   string         `yaml:"git"`
+	Path  string         `yaml:"path"`
+}
+
+// Source is a source-of-truth module: a Provider plus an optional module path
+// (read from the repo's go.mod when empty).
+type Source struct {
+	Provider `yaml:",inline"`
+	Module   string `yaml:"module"`
+}
+
+// Location returns "gitea", "git", or "path", or an error if not exactly one
+// location field is set.
+func (p Provider) Location() (string, error) {
+	n := 0
+	kind := ""
+	if p.Gitea != nil {
+		n++
+		kind = "gitea"
+	}
+	if p.Git != "" {
+		n++
+		kind = "git"
+	}
+	if p.Path != "" {
+		n++
+		kind = "path"
+	}
+	if n != 1 {
+		return "", fmt.Errorf("provider %q must set exactly one of gitea/git/path (found %d)", p.Name, n)
+	}
+	return kind, nil
+}
+
 // Config holds all runtime configuration for depscanner.
 type Config struct {
 	Gitea           GiteaConfig       `yaml:"gitea"`
@@ -37,6 +85,8 @@ type Config struct {
 	BranchTracking    map[string]string `yaml:"branch_tracking"`
 	UnshallowBranches []string          `yaml:"unshallow_branches"`
 	Offline         bool              `yaml:"offline"`
+	Sources         []Source          `yaml:"sources"`
+	Consumers       []Provider        `yaml:"consumers"`
 }
 
 // Validate checks that all required fields are present.
