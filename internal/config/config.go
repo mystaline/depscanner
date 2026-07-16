@@ -151,21 +151,69 @@ type Config struct {
 
 // Validate checks that all required fields are present.
 func (c *Config) Validate() error {
-	if !c.Offline {
-		if c.Gitea.URL == "" {
-			return fmt.Errorf("gitea.url is required when not in offline mode")
-		}
-		if c.Gitea.Token == "" {
-			return fmt.Errorf("gitea.token is required when not in offline mode")
-		}
-		if c.Gitea.Org == "" && len(c.Gitea.Orgs) == 0 {
-			return fmt.Errorf("gitea.org or gitea.orgs is required when not in offline mode")
+	if len(c.Sources) == 0 {
+		return fmt.Errorf("at least one source is required (set `sources` or legacy `target_module`)")
+	}
+	if len(c.Consumers) == 0 {
+		return fmt.Errorf("at least one consumer is required (set `consumers` or legacy `gitea.org`/`gitea.orgs`)")
+	}
+	for _, s := range c.Sources {
+		if _, err := s.Location(); err != nil {
+			return fmt.Errorf("source: %w", err)
 		}
 	}
-	if c.TargetModule == "" {
-		return fmt.Errorf("target_module is required")
+	for _, p := range c.Consumers {
+		if _, err := p.Location(); err != nil {
+			return fmt.Errorf("consumer: %w", err)
+		}
 	}
 	return nil
+}
+
+// normalize back-fills Sources/Consumers from the legacy single-target config
+// when the new-style lists are empty, so old config files keep working.
+func (c *Config) normalize() {
+	legacyGitea := func() *GiteaProvider {
+		if c.Gitea.URL == "" && c.Gitea.Org == "" && len(c.Gitea.Orgs) == 0 {
+			return nil
+		}
+		return &GiteaProvider{URL: c.Gitea.URL, Token: c.Gitea.Token}
+	}
+
+	if len(c.Sources) == 0 && c.TargetModule != "" {
+		src := Source{Module: c.TargetModule}
+		if g := legacyGitea(); g != nil {
+			owner, _ := parseModuleOwner(c.TargetModule)
+			gp := *g
+			gp.Org = owner
+			src.Provider = Provider{Gitea: &gp}
+		}
+		c.Sources = []Source{src}
+	}
+
+	if len(c.Consumers) == 0 {
+		for _, org := range c.ActiveOrgs() {
+			c.Consumers = append(c.Consumers, Provider{
+				Gitea: &GiteaProvider{
+					URL:          c.Gitea.URL,
+					Token:        c.Gitea.Token,
+					Org:          org.Name,
+					IncludeRepos: org.IncludeRepos,
+					ExcludeRepos: org.ExcludeRepos,
+				},
+			})
+		}
+	}
+}
+
+// parseModuleOwner extracts the owner segment (host/owner/repo → owner) from a
+// module path. Returns "" if the path is not host/owner/repo shaped.
+func parseModuleOwner(modulePath string) (owner, repo string) {
+	parts := strings.Split(modulePath, "/")
+	if len(parts) < 3 {
+		return "", ""
+	}
+	return parts[len(parts)-2], parts[len(parts)-1]
 }
 
 // Load reads the config file at path (default: ~/.depscanner.yaml if empty).
@@ -212,6 +260,7 @@ func Load(path string) (*Config, error) {
 	if len(cfg.UnshallowBranches) == 0 {
 		cfg.UnshallowBranches = defaultUnshallowBranches()
 	}
+	cfg.normalize()
 	return &cfg, nil
 }
 
