@@ -50,12 +50,12 @@ func TestScanE2E_MultiSource(t *testing.T) {
 	root := t.TempDir()
 	cache := filepath.Join(root, "cache")
 
-	// Consumer org "BETS-V2" served from a bare repo the manager can clone.
+	// Consumer org "org-a" served from a bare repo the manager can clone.
 	consumerSrc := filepath.Join(root, "svc-a-src")
 	gitInit(t, consumerSrc, map[string]string{
-		"go.mod": "module svc/a\n\ngo 1.22\n\nrequire example.com/org/ts-utils v0.1.0\n",
+		"go.mod": "module svc/a\n\ngo 1.22\n\nrequire example.com/org/acme-lib v0.1.0\n",
 		"main.go": `package main
-import "example.com/org/ts-utils/helper"
+import "example.com/org/acme-lib/helper"
 func main() { helper.Must(nil) }
 `,
 	})
@@ -65,18 +65,18 @@ func main() { helper.Must(nil) }
 	}
 
 	// Source module as a local path provider (module read from its go.mod).
-	sourceDir := filepath.Join(root, "ts-utils")
+	sourceDir := filepath.Join(root, "acme-lib")
 	if err := os.MkdirAll(filepath.Join(sourceDir, "helper"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sourceDir, "go.mod"), []byte("module example.com/org/ts-utils\n\ngo 1.22\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(sourceDir, "go.mod"), []byte("module example.com/org/acme-lib\n\ngo 1.22\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	fake := fakeLister{repos: []gitea.Repository{{Name: "svc-a", CloneURL: bare}}}
 	factory := func(string, string) repo.Lister { return fake }
 
-	consumer := config.Provider{Gitea: &config.GiteaProvider{URL: "x", Token: "x", Org: "BETS-V2"}}
+	consumer := config.Provider{Gitea: &config.GiteaProvider{URL: "x", Token: "x", Org: "org-a"}}
 	cset, err := repo.ResolveProvider(consumer, cache, false, factory)
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +85,7 @@ func main() { helper.Must(nil) }
 		t.Fatal(err)
 	}
 
-	src := config.Source{Provider: config.Provider{Name: "ts-utils", Path: sourceDir}}
+	src := config.Source{Provider: config.Provider{Name: "acme-lib", Path: sourceDir}}
 	sres, err := repo.ResolveProvider(src.Provider, cache, false, factory)
 	if err != nil {
 		t.Fatal(err)
@@ -97,11 +97,11 @@ func main() { helper.Must(nil) }
 	t.Cleanup(func() { funcNames = nil })
 
 	repoPath := cset.Mgr.GetRepoPath("svc-a")
-	res, hasGoMod, usesTarget := scanRepoForSource(repoPath, "example.com/org/ts-utils", "ts-utils", cset.Group, "svc-a", "main", "", cset.Repos[0], analysis.ReturnTypeRegistry{})
+	res, hasGoMod, usesTarget := scanRepoForSource(repoPath, "example.com/org/acme-lib", "acme-lib", cset.Group, "svc-a", "main", "", cset.Repos[0], analysis.ReturnTypeRegistry{})
 	if !hasGoMod || !usesTarget {
-		t.Fatalf("expected svc-a to use ts-utils: hasGoMod=%v usesTarget=%v", hasGoMod, usesTarget)
+		t.Fatalf("expected svc-a to use acme-lib: hasGoMod=%v usesTarget=%v", hasGoMod, usesTarget)
 	}
-	if res.SourceName != "ts-utils" || res.Group != "BETS-V2" {
+	if res.SourceName != "acme-lib" || res.Group != "org-a" {
 		t.Fatalf("tagging wrong: source=%q group=%q", res.SourceName, res.Group)
 	}
 	if len(res.CallSites) != 1 {
@@ -116,5 +116,5 @@ func readModuleForTest(t *testing.T, sres repo.Resolved, sourceDir string) (stri
 	if sres.Mgr.GetRepoPath(sres.Repos[0].Name) != sourceDir {
 		t.Fatalf("path provider resolved to %q, want %q", sres.Mgr.GetRepoPath(sres.Repos[0].Name), sourceDir)
 	}
-	return "example.com/org/ts-utils", nil
+	return "example.com/org/acme-lib", nil
 }

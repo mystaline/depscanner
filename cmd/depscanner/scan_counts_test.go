@@ -10,10 +10,10 @@ import "testing"
 func TestCountScanResults_MultiSource(t *testing.T) {
 	results := []repoScanResult{
 		// svc-a has go.mod and imports both sources: one repo, two relationships.
-		{Name: "svc-a", SourceName: "ts-utils", HasGoMod: true, UsesTarget: true},
+		{Name: "svc-a", SourceName: "acme-lib", HasGoMod: true, UsesTarget: true},
 		{Name: "svc-a", SourceName: "core", HasGoMod: true, UsesTarget: true},
 		// svc-b has go.mod but uses neither source.
-		{Name: "svc-b", SourceName: "ts-utils", HasGoMod: true, UsesTarget: false},
+		{Name: "svc-b", SourceName: "acme-lib", HasGoMod: true, UsesTarget: false},
 		{Name: "svc-b", SourceName: "core", HasGoMod: true, UsesTarget: false},
 	}
 
@@ -35,7 +35,7 @@ func TestCountScanResults_MultiSource(t *testing.T) {
 
 func TestCountScanResults_NoGoMod(t *testing.T) {
 	results := []repoScanResult{
-		{Name: "svc-c", SourceName: "ts-utils", HasGoMod: false, UsesTarget: false},
+		{Name: "svc-c", SourceName: "acme-lib", HasGoMod: false, UsesTarget: false},
 	}
 	totalUsingAnySource, totalGoMod, totalTarget := countScanResults(results)
 	if totalGoMod != 0 || totalUsingAnySource != 0 || totalTarget != 0 {
