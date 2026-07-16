@@ -206,7 +206,7 @@ func runScan(_ *cobra.Command, _ []string) error {
 			repoPath := mgr.GetRepoPath(r.Name)
 			repoBranch := cfg.GetBranchForRepo(r.Name, branch)
 			for _, src := range sources {
-				res, _, _ := scanRepoForSource(repoPath, src.module, src.name, cset.Group, r.Name, repoBranch, src.latestHash, r)
+				res, _, _ := scanRepoForSource(repoPath, src.module, src.name, cset.Group, r.Name, repoBranch, src.latestHash, r, src.registry)
 				mu.Lock()
 				results = append(results, res)
 				mu.Unlock()
@@ -308,6 +308,7 @@ type resolvedSource struct {
 	name       string
 	module     string
 	latestHash string
+	registry   analysis.ReturnTypeRegistry
 }
 
 // resolveSourceModule ensures the source repo is available and determines
@@ -347,6 +348,14 @@ func resolveSourceModule(s config.Source, cfg *config.Config, factory repo.Liste
 	}
 	rs.module = module
 
+	if idx, idxErr := analysis.BuildSymbolIndex(repoPath, module); idxErr == nil {
+		rs.registry = analysis.BuildReturnTypeRegistry(idx)
+	}
+	// idxErr is intentionally non-fatal: if the source can't be indexed (e.g.
+	// unparseable files), scanning still proceeds — the registry stays at its
+	// zero value, which makes the new local-var/chain detectors a no-op,
+	// identical to pre-Phase-A behavior.
+
 	// Staleness (branch mode, gitea sources only).
 	if branch != "" && !cfg.Offline && s.Gitea != nil {
 		targetBranch := cfg.BranchTracking[branch]
@@ -371,7 +380,7 @@ func giteaListerFactory() repo.ListerFactory {
 // scanRepoForSource runs go.mod detection + symbol/type scans for one repo
 // against one source module. ok is false when the repo has no go.mod or does
 // not require the module.
-func scanRepoForSource(repoPath, moduleParam, sourceName, group, repoName, repoBranch, latestTargetHash string, r gitea.Repository) (res repoScanResult, hasGoMod, usesTarget bool) {
+func scanRepoForSource(repoPath, moduleParam, sourceName, group, repoName, repoBranch, latestTargetHash string, r gitea.Repository, registry analysis.ReturnTypeRegistry) (res repoScanResult, hasGoMod, usesTarget bool) {
 	goModPath := filepath.Join(repoPath, "go.mod")
 	if _, err := os.Stat(goModPath); err != nil {
 		return repoScanResult{Name: repoName, SourceName: sourceName, Group: group, Branch: repoBranch, HasGoMod: false, CloneURL: r.CloneURL}, false, false
@@ -417,18 +426,18 @@ func scanRepoForSource(repoPath, moduleParam, sourceName, group, repoName, repoB
 		return res, hasGoMod, false
 	}
 
-	res.CallSites = collectCallSites(repoPath, moduleParam, funcNames, repoName)
-	res.MethodSites = collectCallSites(repoPath, moduleParam, methodNames, repoName)
+	res.CallSites = collectCallSites(repoPath, moduleParam, funcNames, repoName, registry)
+	res.MethodSites = collectCallSites(repoPath, moduleParam, methodNames, repoName, registry)
 	res.TypeRefs = collectTypeRefs(repoPath, moduleParam, typeNames)
-	res.ConstRefs = collectSymbolRefs(repoPath, moduleParam, constNames, repoName)
-	res.VarRefs = collectSymbolRefs(repoPath, moduleParam, varNames, repoName)
+	res.ConstRefs = collectSymbolRefs(repoPath, moduleParam, constNames, repoName, registry)
+	res.VarRefs = collectSymbolRefs(repoPath, moduleParam, varNames, repoName, registry)
 	return res, hasGoMod, true
 }
 
-func collectCallSites(repoPath, moduleParam string, names []string, repoName string) []callSiteResult {
+func collectCallSites(repoPath, moduleParam string, names []string, repoName string, registry analysis.ReturnTypeRegistry) []callSiteResult {
 	var out []callSiteResult
 	for _, name := range names {
-		sites, warnings, err := analysis.ScanSymbolReferences(repoPath, moduleParam, name)
+		sites, warnings, err := analysis.ScanSymbolReferences(repoPath, moduleParam, name, registry)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  warn: scan %s in %s: %v\n", name, repoName, err)
 		}
@@ -442,10 +451,10 @@ func collectCallSites(repoPath, moduleParam string, names []string, repoName str
 	return out
 }
 
-func collectSymbolRefs(repoPath, moduleParam string, names []string, repoName string) []symbolRefResult {
+func collectSymbolRefs(repoPath, moduleParam string, names []string, repoName string, registry analysis.ReturnTypeRegistry) []symbolRefResult {
 	var out []symbolRefResult
 	for _, name := range names {
-		sites, warnings, err := analysis.ScanSymbolReferences(repoPath, moduleParam, name)
+		sites, warnings, err := analysis.ScanSymbolReferences(repoPath, moduleParam, name, registry)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  warn: scan %s in %s: %v\n", name, repoName, err)
 		}
