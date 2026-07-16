@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"text/tabwriter"
 
 	"github.com/mystaline/depscanner/internal/analysis"
 	"github.com/mystaline/depscanner/internal/config"
-	"github.com/mystaline/depscanner/internal/gitea"
 	"github.com/mystaline/depscanner/internal/repo"
 	"github.com/spf13/cobra"
 )
@@ -40,21 +40,35 @@ func runDiff(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("config: %w", err)
 	}
 
-	_, targetRepo := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
-	mgr := repo.NewManager(cfg.CacheDir, cfg.Gitea.Org)
+	src, err := selectSource(cfg, sourceFlag)
+	if err != nil {
+		return err
+	}
+	res, err := repo.ResolveProvider(src.Provider, cfg.CacheDir, cfg.Offline, giteaListerFactory())
+	if err != nil {
+		return fmt.Errorf("resolve source: %w", err)
+	}
+	targetRepo := res.Repos[0].Name
+	mgr := res.Mgr
 	repoPath := mgr.GetRepoPath(targetRepo)
 
-	// Ensure the target repo exists locally.
-	if _, statErr := os.Stat(repoPath); statErr != nil {
-		if cfg.Offline {
-			return fmt.Errorf("target module %q not found in cache (%s) and offline mode is enabled", cfg.TargetModule, repoPath)
+	if !res.Local {
+		if _, statErr := os.Stat(filepath.Join(repoPath, ".git")); os.IsNotExist(statErr) {
+			if cfg.Offline {
+				return fmt.Errorf("source %q not cached and offline", targetRepo)
+			}
+			fmt.Printf("Cloning source module %s...\n", targetRepo)
+			if err := mgr.SyncRepos(res.Repos, false); err != nil {
+				return fmt.Errorf("sync source module: %w", err)
+			}
 		}
-		targetOwner, _ := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
-		fmt.Printf("Cloning target module %s...\n", cfg.TargetModule)
-		cloneURL := fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo)
-		repos := []gitea.Repository{{Name: targetRepo, CloneURL: cloneURL}}
-		if err := mgr.SyncRepos(repos, false); err != nil {
-			return fmt.Errorf("sync target module: %w", err)
+	}
+
+	targetModule := src.Module
+	if targetModule == "" {
+		targetModule, err = analysis.ReadModulePath(filepath.Join(repoPath, "go.mod"))
+		if err != nil {
+			return fmt.Errorf("read module path: %w", err)
 		}
 	}
 
@@ -69,7 +83,7 @@ func runDiff(_ *cobra.Command, args []string) error {
 	if err := mgr.CheckoutCommit(targetRepo, from); err != nil {
 		return fmt.Errorf("checkout %s: %w", from, err)
 	}
-	oldIndex, err := analysis.BuildSymbolIndex(repoPath, cfg.TargetModule)
+	oldIndex, err := analysis.BuildSymbolIndex(repoPath, targetModule)
 	if err != nil {
 		return fmt.Errorf("build index at %s: %w", from, err)
 	}
@@ -79,7 +93,7 @@ func runDiff(_ *cobra.Command, args []string) error {
 	if err := mgr.CheckoutCommit(targetRepo, to); err != nil {
 		return fmt.Errorf("checkout %s: %w", to, err)
 	}
-	newIndex, err := analysis.BuildSymbolIndex(repoPath, cfg.TargetModule)
+	newIndex, err := analysis.BuildSymbolIndex(repoPath, targetModule)
 	if err != nil {
 		return fmt.Errorf("build index at %s: %w", to, err)
 	}
@@ -100,7 +114,7 @@ func runDiff(_ *cobra.Command, args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(diffOutput{
 			From:         from,
 			To:           to,
-			TargetModule: cfg.TargetModule,
+			TargetModule: targetModule,
 			Changes:      changes,
 			Total:        len(changes),
 			Breaking:     countBreaking(changes),
