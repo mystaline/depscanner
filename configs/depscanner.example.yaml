@@ -12,15 +12,15 @@ gitea:
 # Multi-org mode: replace gitea.org with gitea.orgs (per-org include/exclude are optional)
 # gitea:
 #   orgs:
-#     - name: BETS-Global-Settings
+#     - name: org-a
 #       include_repos:
-#         - ts-global-settings
-#     - name: BETS-Fixed-Asset
+#         - shared-settings
+#     - name: org-b
 #       include_repos:
-#         - fats
-#         - fats-api-template
+#         - svc-a
+#         - svc-a-template
 #       exclude_repos:
-#         - fats-old
+#         - svc-a-old
 
 # Module path of the shared library to scan for.
 target_module: "gitea.example.com/my-org/shared-lib"
@@ -50,3 +50,22 @@ exclude_repos:
   - docs
   # - "*-temp"       # exclude all repos ending in -temp
   # - "legacy-*"   # exclude all repos starting with legacy-
+
+# --- Multi-source mode (Phase B) ---
+# Declare N sources of truth and a consumer pool. Every consumer is scanned for
+# calls to any source. Results are grouped by source and by org/group.
+# Legacy `target_module` + `gitea.org(s)` above still works and is auto-mapped.
+#
+# sources:
+#   - name: acme-lib
+#     gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: org-a }
+#     module: gitea.example.com/org-a/acme-lib   # optional; read from go.mod if omitted
+#   - name: acme-core
+#     path: ~/Workspace/.../acme-core           # local checkout, used in place
+#
+# consumers:
+#   - gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: org-a }
+#   - gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: org-b, exclude_repos: [docs] }
+#   - path: ~/Workspace/.../some-service
+#
+# diff/impact select one source:  depscanner diff --source acme-lib <from> <to>

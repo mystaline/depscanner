@@ -38,51 +38,67 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		cfg.CacheDir = cacheDir
 	}
 
-	mgr := repo.NewManager(cfg.CacheDir, cfg.Gitea.Org)
-
 	if cfg.Offline {
 		noFetch = true
 	}
 
-	targetOwner, targetRepo := gitea.ParseModuleOwnerRepo(cfg.TargetModule)
+	factory := giteaListerFactory()
+
+	src, err := selectSource(cfg, sourceFlag)
+	if err != nil {
+		return err
+	}
+	res, err := repo.ResolveProvider(src.Provider, cfg.CacheDir, cfg.Offline, factory)
+	if err != nil {
+		return fmt.Errorf("resolve source: %w", err)
+	}
+	targetRepo := res.Repos[0].Name
+	mgr := res.Mgr
 	targetRepoPath := mgr.GetRepoPath(targetRepo)
 
 	// Clone target repo if not present locally.
-	if _, statErr := os.Stat(targetRepoPath); statErr != nil {
-		if cfg.Offline {
-			return fmt.Errorf("target module %q not found in cache (%s) and offline mode is enabled", cfg.TargetModule, targetRepoPath)
+	if !res.Local {
+		if _, statErr := os.Stat(filepath.Join(targetRepoPath, ".git")); os.IsNotExist(statErr) {
+			if cfg.Offline {
+				return fmt.Errorf("source %q not found in cache (%s) and offline mode is enabled", targetRepo, targetRepoPath)
+			}
+			fmt.Printf("Cloning target module %s...\n", targetRepo)
+			if err := mgr.SyncRepos(res.Repos, false); err != nil {
+				return fmt.Errorf("clone target module: %w", err)
+			}
 		}
-		fmt.Printf("Cloning target module %s...\n", cfg.TargetModule)
-		cloneURL := fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo)
-		if err := mgr.SyncRepos([]gitea.Repository{{Name: targetRepo, CloneURL: cloneURL}}, false); err != nil {
-			return fmt.Errorf("clone target module: %w", err)
+	}
+
+	targetModule := src.Module
+	if targetModule == "" {
+		targetModule, err = analysis.ReadModulePath(filepath.Join(targetRepoPath, "go.mod"))
+		if err != nil {
+			return fmt.Errorf("read module path: %w", err)
 		}
 	}
 
 	// Ensure target repo is updated and unshallowed for ancestry checks (if online)
-	if !noFetch {
+	if !res.Local && !noFetch {
 		unshallowTargetRepo(targetRepoPath, defaultUnshallowTimeout, cfg.UnshallowBranches)
 		if branch != "" {
 			// Ensure the specific branch we are interested in is fetched
 			_ = exec.Command("git", "-C", targetRepoPath, "fetch", "origin", branch+":"+branch, "--quiet").Run()
 		}
 		_ = exec.Command("git", "-C", targetRepoPath, "fetch", "--all", "--tags", "--quiet").Run()
-	} else if _, statErr := os.Stat(targetRepoPath); statErr != nil {
-		return fmt.Errorf("target module %q not found in cache (%s) and offline mode is enabled", cfg.TargetModule, targetRepoPath)
 	}
 
 	// Phase 1: Diff
-	fmt.Printf("Phase 1: Diffing target module %s (%s → %s)...\n", cfg.TargetModule, shortenHash(from), shortenHash(to))
+	fmt.Printf("Phase 1: Diffing target module %s (%s → %s)...\n", targetModule, shortenHash(from), shortenHash(to))
 
 	if err := mgr.CheckoutCommit(targetRepo, from); err != nil {
 		return err
 	}
-	oldIndex, _ := analysis.BuildSymbolIndex(targetRepoPath, cfg.TargetModule)
+	oldIndex, _ := analysis.BuildSymbolIndex(targetRepoPath, targetModule)
 
 	if err := mgr.CheckoutCommit(targetRepo, to); err != nil {
 		return err
 	}
-	newIndex, _ := analysis.BuildSymbolIndex(targetRepoPath, cfg.TargetModule)
+	newIndex, _ := analysis.BuildSymbolIndex(targetRepoPath, targetModule)
 
 	changes := analysis.DiffSymbols(oldIndex, newIndex)
 	var interesting []analysis.SymbolChange
@@ -99,8 +115,8 @@ func runImpact(cmd *cobra.Command, args []string) error {
 				fullPkg, symName := analysis.SplitSymbolKey(c.Symbol)
 				if symName != "" {
 					relPkg := ""
-					if fullPkg != cfg.TargetModule {
-						relPkg = strings.TrimPrefix(fullPkg, cfg.TargetModule+"/")
+					if fullPkg != targetModule {
+						relPkg = strings.TrimPrefix(fullPkg, targetModule+"/")
 					}
 					target := symName
 					if relPkg != "" {
@@ -134,26 +150,7 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Found %d impactful changes (%d symbols, %d types)\n\n", len(interesting), len(symbolTargets), len(typeTargets))
 
 	// Phase 2: Concurrent Scan
-	var repos []gitea.Repository
-	if cfg.Offline {
-		noFetch = true
-		fmt.Printf("Listing repositories from local cache: %s\n", mgr.GetOrgPath())
-		var lerr error
-		repos, lerr = mgr.ListLocalRepos()
-		if lerr != nil {
-			return fmt.Errorf("list local repos: %w", lerr)
-		}
-	} else {
-		giteaClient := gitea.NewClient(cfg.Gitea.URL, cfg.Gitea.Token)
-		var lerr error
-		repos, lerr = giteaClient.ListOrgRepos(cfg.Gitea.Org)
-		if lerr != nil {
-			return fmt.Errorf("list repos: %w", lerr)
-		}
-	}
-	repos = filterRepos(repos, cfg.IncludeRepos, cfg.ExcludeRepos)
-
-	fmt.Printf("Phase 2: Syncing and scanning %d repos (concurrent)...\n", len(repos))
+	fmt.Printf("Phase 2: Syncing and scanning consumers (concurrent)...\n")
 
 	var mu sync.Mutex
 	repoCallSites := make(map[string][]analysis.CallSite)
@@ -161,30 +158,32 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	repoVersions := make(map[string]string)
 	scannedCount := 0
 
-	processFn := func(r gitea.Repository, synced bool) {
+	// scanConsumerImpact is the per-repo scan body, parameterized on the
+	// consumer group's manager so repoPath resolves against the right cache dir.
+	scanConsumerImpact := func(cmgr *repo.Manager, r gitea.Repository, synced bool) {
 		if !synced {
 			return
 		}
-		repoPath := mgr.GetRepoPath(r.Name)
+		repoPath := cmgr.GetRepoPath(r.Name)
 
 		goModPath := filepath.Join(repoPath, "go.mod")
 		if _, err := os.Stat(goModPath); err != nil {
 			return
 		}
-		info, _ := analysis.ParseGoMod(goModPath, cfg.TargetModule)
+		info, _ := analysis.ParseGoMod(goModPath, targetModule)
 		if !info.Found {
 			return
 		}
 
 		var allSites []analysis.CallSite
 		for _, target := range symbolTargets {
-			sites, _, _ := analysis.ScanSymbolReferences(repoPath, cfg.TargetModule, target)
+			sites, _, _ := analysis.ScanSymbolReferences(repoPath, targetModule, target)
 			allSites = append(allSites, sites...)
 		}
 
 		var allTypeRefs []analysis.TypeRef
 		for _, target := range typeTargets {
-			refs, _ := analysis.ScanTypeReferences(repoPath, cfg.TargetModule, target)
+			refs, _ := analysis.ScanTypeReferences(repoPath, targetModule, target)
 			allTypeRefs = append(allTypeRefs, refs...)
 		}
 
@@ -202,10 +201,28 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		mu.Unlock()
 	}
 
-	if branch != "" && !cfg.Offline {
-		mgr.PipelineSyncBranchAndProcess(repos, branch, noFetch, 4, processFn)
-	} else {
-		mgr.PipelineSyncAndProcess(repos, noFetch, 4, processFn)
+	for _, c := range cfg.Consumers {
+		cres, rerr := repo.ResolveProvider(c, cfg.CacheDir, cfg.Offline, factory)
+		if rerr != nil {
+			return fmt.Errorf("resolve consumer: %w", rerr)
+		}
+		fmt.Printf("  %s: %d repositories\n", cres.Group, len(cres.Repos))
+
+		if cres.Local {
+			for _, r := range cres.Repos {
+				scanConsumerImpact(cres.Mgr, r, true)
+			}
+			continue
+		}
+		if branch != "" && !cfg.Offline {
+			cres.Mgr.PipelineSyncBranchAndProcess(cres.Repos, branch, noFetch, 4, func(r gitea.Repository, s bool) {
+				scanConsumerImpact(cres.Mgr, r, s)
+			})
+		} else {
+			cres.Mgr.PipelineSyncAndProcess(cres.Repos, noFetch, 4, func(r gitea.Repository, s bool) {
+				scanConsumerImpact(cres.Mgr, r, s)
+			})
+		}
 	}
 	fmt.Println()
 

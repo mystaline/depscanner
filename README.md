@@ -86,6 +86,10 @@ branch_tracking:
   main: main
 ```
 
+### Multi-source Mode
+
+depscanner supports scanning multiple independent sources of truth against a consumer pool. Declare `sources` (shared libraries to track) and `consumers` (services to scan) in your config, with each provider location specified as Gitea (org), Git URL (git clone target), or local path. Results are grouped by source name and org/group. Use the `--source <name>` flag with `diff` and `impact` commands to analyze a specific source. Cached repositories are organized under `cache_dir/<group>/<repo>`, where group is derived from Gitea org, Git host/owner, or local directory. Legacy configs with `target_module` and `gitea.org` continue to work unchanged.
+
 ## Usage
 
 ### 1. List repos using the shared library

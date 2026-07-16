@@ -4,6 +4,7 @@ package analysis
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"strings"
 )
@@ -85,4 +86,26 @@ func parseRequireLine(line, targetModule string) (string, string, bool) {
 		return mod, ver, true
 	}
 	return "", "", false
+}
+
+// ReadModulePath returns the module path declared on the `module` line of a
+// go.mod file.
+func ReadModulePath(goModPath string) (string, error) {
+	f, err := os.Open(goModPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module")), nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("no module directive in %s", goModPath)
 }
