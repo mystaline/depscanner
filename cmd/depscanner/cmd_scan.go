@@ -285,7 +285,8 @@ func runScan(_ *cobra.Command, _ []string) error {
 		return json.NewEncoder(os.Stdout).Encode(out)
 	}
 
-	printGroupedResults(allResults, sources, multiGroup, targetSigs)
+	checkSigs = targetSigs
+	printGroupedResults(allResults, sources, multiGroup)
 	fmt.Printf("\nSummary: %d/%d Go repos depend on a source module\n", totalTarget, totalGoMod)
 	return nil
 }
@@ -462,108 +463,116 @@ func collectTypeRefs(repoPath, moduleParam string, names []string) []typeRefResu
 	return out
 }
 
-// printGroupedResults prints the table-format scan output, grouped by
-// consumer group and (when more than one) source module.
-//
-// ponytail: minimal port of the old single-source table printer, grouped by
-// (Group, SourceName); Task 7 owns the real grouped-table design.
-func printGroupedResults(allResults []repoScanResult, sources []resolvedSource, multiGroup bool, targetSigs map[string]*analysis.FuncSignature) {
-	type groupKey struct{ group, source string }
-	order := []groupKey{}
-	byGroup := map[groupKey][]repoScanResult{}
-	for _, r := range allResults {
-		k := groupKey{r.Group, r.SourceName}
-		if _, ok := byGroup[k]; !ok {
-			order = append(order, k)
+// checkSigs holds the resolved target function signatures for --check
+// validation. Set by runScan before calling printGroupedResults; read by
+// printGroupedResults so the printer's signature doesn't need to carry it.
+var checkSigs map[string]*analysis.FuncSignature
+
+// groupBySourceAndGroup buckets results by source name, then by consumer
+// group, so printGroupedResults can iterate source-major and group-sorted.
+func groupBySourceAndGroup(results []repoScanResult) map[string]map[string][]repoScanResult {
+	out := map[string]map[string][]repoScanResult{}
+	for _, r := range results {
+		if out[r.SourceName] == nil {
+			out[r.SourceName] = map[string][]repoScanResult{}
 		}
-		byGroup[k] = append(byGroup[k], r)
+		out[r.SourceName][r.Group] = append(out[r.SourceName][r.Group], r)
 	}
+	return out
+}
 
-	moduleFor := map[string]string{}
-	for _, s := range sources {
-		moduleFor[s.name] = s.module
-	}
+// printGroupedResults prints the table-format scan output, grouped by source
+// module (outer, in the order given) then by consumer group (inner, sorted).
+func printGroupedResults(allResults []repoScanResult, sources []resolvedSource, multiGroup bool) {
+	grouped := groupBySourceAndGroup(allResults)
 
-	for _, k := range order {
-		results := byGroup[k]
-		targetCount := 0
-		for _, r := range results {
-			if r.UsesTarget {
-				targetCount++
-			}
+	for _, src := range sources {
+		byGroup := grouped[src.name]
+		groupNames := make([]string, 0, len(byGroup))
+		for g := range byGroup {
+			groupNames = append(groupNames, g)
 		}
+		sort.Strings(groupNames)
 
-		if multiGroup {
-			fmt.Printf("--- %s / %s ---\n", k.group, k.source)
-		}
-
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		if branch != "" {
-			fmt.Fprintf(w, "  STATUS\tREPOSITORY\tVERSION/COMMIT\tSTALENESS\n")
-			fmt.Fprintf(w, "  ------\t----------\t--------------\t---------\n")
-		} else {
-			fmt.Fprintf(w, "  STATUS\tREPOSITORY\tTARGET VERSION\n")
-			fmt.Fprintf(w, "  ------\t----------\t--------------\n")
-		}
-
-		for _, r := range results {
-			switch {
-			case !r.HasGoMod:
-				if branch != "" {
-					fmt.Fprintf(w, "  %s✗%s\t%s\t%s\t\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(no go.mod)")
-				} else {
-					fmt.Fprintf(w, "  %s✗%s\t%s\t%s\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(no go.mod)")
-				}
-			case !r.UsesTarget:
-				if branch != "" {
-					fmt.Fprintf(w, "  %s·%s\t%s\t%s\t\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(not used)")
-				} else {
-					fmt.Fprintf(w, "  %s·%s\t%s\t%s\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(not used)")
-				}
-			case branch != "" && r.Status != "":
-				versionCol := r.TargetVersion
-				if r.CommitHash != "" {
-					versionCol = r.CommitHash
-				}
-				statusColor := statusToColor(r.Status)
-				fmt.Fprintf(w, "  %s%s%s\t%s\t%s\t%s%s%s\n",
-					statusColor, statusIcon(r.Status), formatter.ColorReset(),
-					r.Name, versionCol,
-					statusColor, r.StatusDetail, formatter.ColorReset())
-			default:
-				fmt.Fprintf(w, "  %s✓%s\t%s\t%s\n", formatter.ColorGreen(), formatter.ColorReset(), r.Name, r.TargetVersion)
-			}
-		}
-		w.Flush()
-
-		module := moduleFor[k.source]
-
-		if packages {
-			fmt.Println("\nSub-package usage:")
+		for _, g := range groupNames {
+			results := byGroup[g]
+			targetCount := 0
 			for _, r := range results {
-				if !r.UsesTarget || len(r.Packages) == 0 {
-					continue
+				if r.UsesTarget {
+					targetCount++
 				}
-				fmt.Printf("  %-35s %s\n", r.Name, strings.Join(r.Packages, ", "))
 			}
-		}
 
-		for _, name := range funcNames {
-			printCallSites("Call sites", name, targetCount, module, results, targetSigs,
-				func(r repoScanResult) []callSiteResult { return r.CallSites })
-		}
-		for _, name := range methodNames {
-			printCallSites("Method call sites", name, targetCount, module, results, nil,
-				func(r repoScanResult) []callSiteResult { return r.MethodSites })
-		}
-		for _, name := range typeNames {
-			printTypeRefs(name, targetCount, module, results)
-		}
-		for _, name := range constNames {
-			printSymbolRefs("Const references", name, targetCount, module, results, func(r repoScanResult) []symbolRefResult { return r.ConstRefs })
-		}
-		for _, name := range varNames {
-			printSymbolRefs("Var references", name, targetCount, module, results, func(r repoScanResult) []symbolRefResult { return r.VarRefs })
+			if multiGroup {
+				fmt.Printf("--- %s / %s ---\n", g, src.name)
+			}
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			if branch != "" {
+				fmt.Fprintf(w, "  STATUS\tREPOSITORY\tVERSION/COMMIT\tSTALENESS\n")
+				fmt.Fprintf(w, "  ------\t----------\t--------------\t---------\n")
+			} else {
+				fmt.Fprintf(w, "  STATUS\tREPOSITORY\tTARGET VERSION\n")
+				fmt.Fprintf(w, "  ------\t----------\t--------------\n")
+			}
+
+			for _, r := range results {
+				switch {
+				case !r.HasGoMod:
+					if branch != "" {
+						fmt.Fprintf(w, "  %s✗%s\t%s\t%s\t\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(no go.mod)")
+					} else {
+						fmt.Fprintf(w, "  %s✗%s\t%s\t%s\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(no go.mod)")
+					}
+				case !r.UsesTarget:
+					if branch != "" {
+						fmt.Fprintf(w, "  %s·%s\t%s\t%s\t\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(not used)")
+					} else {
+						fmt.Fprintf(w, "  %s·%s\t%s\t%s\n", formatter.ColorRed(), formatter.ColorReset(), r.Name, "(not used)")
+					}
+				case branch != "" && r.Status != "":
+					versionCol := r.TargetVersion
+					if r.CommitHash != "" {
+						versionCol = r.CommitHash
+					}
+					statusColor := statusToColor(r.Status)
+					fmt.Fprintf(w, "  %s%s%s\t%s\t%s\t%s%s%s\n",
+						statusColor, statusIcon(r.Status), formatter.ColorReset(),
+						r.Name, versionCol,
+						statusColor, r.StatusDetail, formatter.ColorReset())
+				default:
+					fmt.Fprintf(w, "  %s✓%s\t%s\t%s\n", formatter.ColorGreen(), formatter.ColorReset(), r.Name, r.TargetVersion)
+				}
+			}
+			w.Flush()
+
+			if packages {
+				fmt.Println("\nSub-package usage:")
+				for _, r := range results {
+					if !r.UsesTarget || len(r.Packages) == 0 {
+						continue
+					}
+					fmt.Printf("  %-35s %s\n", r.Name, strings.Join(r.Packages, ", "))
+				}
+			}
+
+			for _, name := range funcNames {
+				printCallSites("Call sites", name, targetCount, src.module, results, checkSigs,
+					func(r repoScanResult) []callSiteResult { return r.CallSites })
+			}
+			for _, name := range methodNames {
+				printCallSites("Method call sites", name, targetCount, src.module, results, nil,
+					func(r repoScanResult) []callSiteResult { return r.MethodSites })
+			}
+			for _, name := range typeNames {
+				printTypeRefs(name, targetCount, src.module, results)
+			}
+			for _, name := range constNames {
+				printSymbolRefs("Const references", name, targetCount, src.module, results, func(r repoScanResult) []symbolRefResult { return r.ConstRefs })
+			}
+			for _, name := range varNames {
+				printSymbolRefs("Var references", name, targetCount, src.module, results, func(r repoScanResult) []symbolRefResult { return r.VarRefs })
+			}
 		}
 	}
 }
