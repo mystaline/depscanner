@@ -50,3 +50,22 @@ exclude_repos:
   - docs
   # - "*-temp"       # exclude all repos ending in -temp
   # - "legacy-*"   # exclude all repos starting with legacy-
+
+# --- Multi-source mode (Phase B) ---
+# Declare N sources of truth and a consumer pool. Every consumer is scanned for
+# calls to any source. Results are grouped by source and by org/group.
+# Legacy `target_module` + `gitea.org(s)` above still works and is auto-mapped.
+#
+# sources:
+#   - name: ts-utils
+#     gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: BETS-V2 }
+#     module: gitea.example.com/BETS-V2/ts-utils   # optional; read from go.mod if omitted
+#   - name: be-core-utils
+#     path: ~/Workspace/.../be-core-utils           # local checkout, used in place
+#
+# consumers:
+#   - gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: BETS-V2 }
+#   - gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: Wangsit-Developer, exclude_repos: [docs] }
+#   - path: ~/Workspace/.../some-service
+#
+# diff/impact select one source:  depscanner diff --source ts-utils <from> <to>
