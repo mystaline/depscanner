@@ -146,6 +146,16 @@ func runImpact(cmd *cobra.Command, args []string) error {
 
 	if len(interesting) == 0 {
 		fmt.Printf("\nNo impactful changes detected.\n")
+		fmt.Printf("All %d changes are additive (new exports, no breaking\n", len(changes))
+		fmt.Printf("signature changes, no behavioral diffs).\n\n")
+		for _, c := range changes {
+			if c.Kind == analysis.ChangeAdded {
+				fmt.Printf("  %s+%s ADDED  %s%s%s\n",
+					formatter.ColorGreen(), formatter.ColorReset(),
+					formatter.ColorBold(), c.Symbol, formatter.ColorReset())
+			}
+		}
+		fmt.Println()
 		return nil
 	}
 	fmt.Printf("  Found %d impactful changes (%d symbols, %d types)\n\n", len(interesting), len(symbolTargets), len(typeTargets))
@@ -205,7 +215,9 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	for _, c := range cfg.Consumers {
 		cres, rerr := repo.ResolveProvider(c, cfg.CacheDir, cfg.Offline, factory)
 		if rerr != nil {
-			return fmt.Errorf("resolve consumer: %w", rerr)
+			label, _ := c.Group()
+			fmt.Fprintf(os.Stderr, "  ⚠ skip consumer %s: %v\n", label, rerr)
+			continue
 		}
 		fmt.Printf("  %s: %d repositories\n", cres.Group, len(cres.Repos))
 

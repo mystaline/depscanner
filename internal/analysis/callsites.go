@@ -571,7 +571,12 @@ func matchesQualifier(importPath, typeName, typeQualifier string) bool {
 	if dotIdx := strings.LastIndex(typeQualifier, "."); dotIdx >= 0 {
 		qualPkgSeg := typeQualifier[:dotIdx]
 		qualType := typeQualifier[dotIdx+1:]
-		return pkgSuffix == qualPkgSeg && typeName == qualType
+		if typeName != qualType {
+			return false
+		}
+		// qualPkgSeg can be "helper" (single) or "module/subpkg/util" (sub-pkg).
+		// Match suffix rather than single pkgSuffix for sub-package support.
+		return strings.HasSuffix(importPath, "/"+qualPkgSeg) || importPath == qualPkgSeg || pkgSuffix == qualPkgSeg
 	}
 	return false
 }

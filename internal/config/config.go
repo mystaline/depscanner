@@ -183,9 +183,10 @@ func (c *Config) normalize() {
 	if len(c.Sources) == 0 && c.TargetModule != "" {
 		src := Source{Module: c.TargetModule}
 		if g := legacyGitea(); g != nil {
-			owner, _ := parseModuleOwner(c.TargetModule)
+			owner, repoName := parseModuleOwner(c.TargetModule)
 			gp := *g
 			gp.Org = owner
+			gp.IncludeRepos = []string{repoName}
 			src.Provider = Provider{Gitea: &gp}
 		}
 		c.Sources = []Source{src}
