@@ -5,7 +5,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go)](https://go.dev)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Stability](https://img.shields.io/badge/Stability-Stable-success?style=flat-square)](#)
-[![Test Coverage](https://img.shields.io/badge/coverage-analysis%2047%25%20%7C%20config%2086%25%20%7C%20gitea%2090%25-blue?style=flat-square)](#testing)
+[![Test Coverage](https://img.shields.io/badge/coverage-analysis%2079%25%20%7C%20config%2082%25%20%7C%20gitea%2091%25-blue?style=flat-square)](#testing)
 
 A high-performance CLI tool designed for large-scale Go organizations to manage shared library dependencies. depscanner analyzes impact, tracks architectural debt, and validates API compatibility across hundreds of repositories.
 
@@ -19,255 +19,223 @@ A high-performance CLI tool designed for large-scale Go organizations to manage 
 - **Gitea Native**: Full integration with Gitea organization APIs.
 - **Behavioral Audit**: Detects logic changes even when function signatures remain identical using SHA-256 body hashing.
 
+## Prerequisites
+
+- **Go 1.22+** and **git**
+- **Gitea** instance with API token (org read + repo read access)
+- Source module hosted on that Gitea (or local path)
+
+<details>
+<summary>Where to find your Gitea token</summary>
+
+1. Log into your Gitea instance
+2. Settings → Applications → Manage Access Tokens
+3. Generate a token with `read:repository` and `read:organization` scopes
+4. Set as env var: `export GITEA_TOKEN="your_token_here"`
+</details>
+
 ## Install
 
 ```bash
-# From source
 go install github.com/mystaline/depscanner/cmd/depscanner@latest
+```
 
-# Or clone and build
+Or clone and build:
+
+```bash
 git clone https://github.com/mystaline/depscanner.git
 cd depscanner
 make build        # outputs bin/depscanner
-make install      # installs to $GOPATH/bin
+sudo mv bin/depscanner /usr/local/bin/   # Linux/macOS
 ```
 
-Requires Go 1.22+ and git.
+Works on **Linux**, **macOS**, **Windows** (native and WSL2).
 
-### Windows Setup
+## Quickstart
 
-depscanner runs natively on Windows and WSL2. Ensure the following are installed:
+```bash
+# 1. Generate scaffold config in your project dir
+depscanner init
 
-1. **Go 1.22+**: Download from [golang.org](https://golang.org/dl)
-2. **Git**: Install [Git for Windows](https://git-scm.com/download/win) or use `choco install git` if using Chocolatey
-3. **Verify Installation**:
-   ```cmd
-   go version
-   git --version
-   ```
+# 2. Edit depscanner.yaml — set Gitea URL, token, org, and source module
 
-**Cache Directory**: On Windows, depscanner stores cached repositories in `%USERPROFILE%\.depscannerepos` by default. You can override with `--cache-dir` flag or set `cache_dir` in config.
+# 3. Scan consumer repos for usage of your source module
+depscanner scan
 
-**Terminal Support**: Output works best in Windows Terminal, PowerShell 7+, or modern cmd.exe. Older cmd.exe may not display Unicode symbols correctly.
+# 4. See who's stale
+depscanner scan --branch dev
 
-**WSL2**: If using WSL2 Fedora/Ubuntu, install Go and Git in the WSL distribution, then use depscanner normally. Cache directories are inside WSL.
+# 5. Compare API between two refs of your source module
+depscanner diff a1b2c3d4 e5f6a7b8
+
+# 6. Check which consumers are impacted by those changes
+depscanner impact a1b2c3d4 e5f6a7b8
+```
 
 ## Configuration
 
-Copy the example config and fill in your values:
+Generate a scaffold config in your project directory:
 
 ```bash
-cp configs/depscanner.example.yaml ~/.depscanner.yaml
+cd ~/Workspace/my-project
+depscanner init  # writes depscanner.yaml
 ```
 
-```yaml
-gitea:
-  url: "https://gitea.com"
-  token: "${GITEA_TOKEN}" # env vars are expanded
-  org: "my-community"
+Or place at `$HOME/.depscanner.yaml` for a global default shared across projects.
 
-target_module: "github.com/example/awesome-lib"
+```yaml
+# Track N shared libraries against a consumer pool.
+sources:
+  - name: awesomelib
+    gitea: { url: https://gitea.com, token: ${GITEA_TOKEN}, org: my-org }
+    module: github.com/my-org/awesome-lib
+
+  # More sources (or just one). Each tracks independent libs.
+  # - name: coreutils
+  #   gitea: { url: ..., token: ${GITEA_TOKEN}, org: another-org }
+
+# Services to scan for usages of any source.
+consumers:
+  - gitea: { url: https://gitea.com, token: ${GITEA_TOKEN}, org: my-org }
+
+  # Consumers can span orgs:
+  # - gitea: { url: ..., token: ${GITEA_TOKEN}, org: partner-org, exclude_repos: [docs] }
+  # - path: ~/Workspace/my-service          # local checkout
+
 cache_dir: "~/.depscanner/repos"
 
-# Optional: only scan specific repos (supports glob patterns: *, ?, [...])
-# include_repos:
-#   - gopher-app
-#   - "service-*"
+# Branch tracking: consumer branch → source branch.
+# Used with --branch for staleness checks.
+branch_tracking:
+  dev: dev
+  main: main
 
-# Optional: skip irrelevant repos (supports glob patterns)
+# Exclusion is shared
 exclude_repos:
   - junk
   - "test-*"
-
-# Branch tracking: maps repo branch to target module branch
-# Used with --branch for staleness detection
-branch_tracking:
-  dev: main
-  main: main
 ```
 
-### Multi-source Mode
+Each provider (`sources`/`consumers`) uses exactly one of:
+- `gitea` — discover repos via Gitea org API
+- `git` — direct clone URL (`git: https://...`)
+- `path` — local directory (`path: ~/Workspace/...`)
 
-depscanner supports scanning multiple independent sources of truth against a consumer pool. Declare `sources` (shared libraries to track) and `consumers` (services to scan) in your config, with each provider location specified as Gitea (org), Git URL (git clone target), or local path. Results are grouped by source name and org/group. Use the `--source <name>` flag with `diff` and `impact` commands to analyze a specific source. Cached repositories are organized under `cache_dir/<group>/<repo>`, where group is derived from Gitea org, Git host/owner, or local directory. Legacy configs with `target_module` and `gitea.org` continue to work unchanged.
+Select a source for `diff`/`impact`:
+
+```bash
+depscanner diff --source awesomelib a1b2c3d4 e5f6a7b8
+```
+
+> **Note:** Legacy configs with `target_module` + `gitea.org` still work but are omitted here for brevity.
+
+### Scan status legend
+
+Repos in output get one of these status indicators:
+
+| Icon | Status | Meaning |
+|------|--------|---------|
+| `✓` | up to date | Imports source module at latest tracked ref |
+| `⚠` | STALE | Imports source module but behind latest ref |
+| `✗` | no go.mod | Not a Go module (no `go.mod`) |
+| `·` | not used | Has `go.mod` but does not import source module |
+
+### Cache dir
+
+Default `~/.depscanner/repos` stores all clones under `<your-target-dir>/<org>/<repo>`. If your workspace uses the same `<org>/<repo>` layout, point `cache_dir` at your workspace root (e.g. `~/Workspace/<scope-or-stakeholder>/backend-codebase`) — depscanner syncs into your existing checkout tree, no duplication. Run `depscanner unshallow` to deepen history if `git pull` ever complains about shallow refs.
+
 
 ## Usage
 
-### 1. List repos using the shared library
+### Scan — find who depends on your library
 
 ```bash
-depscanner scan
+depscanner scan --method RemoveWidgetByCategory --branch dev-beta
 ```
 
-Lists all repositories in the organization and detects dependency status.
+Reports staleness status and call-site locations across every consumer repo.
 
-**Example Output:**
+![scan output](assets/screenshots/scan.png)
 
-```text
-  STATUS  REPOSITORY       TARGET VERSION
-  ------  ----------       --------------
-  ✓       my-cool-app      v1.2.0-20260409024228-2a019f321162
-  ✗       docs-site        (no go.mod)
-  ·       legacy-app       (not used)
-```
-
-- `✓`: Uses the target module.
-- `✗`: Does not have a `go.mod` file.
-- `·`: Has a `go.mod` file but does not import the target module.
-
-### 2. Check for staleness on a specific branch
+### Diff — detect API changes between two refs
 
 ```bash
-depscanner scan --branch main
+depscanner diff a1b2c3d4 e5f6a7b8
 ```
 
-**Example Output:**
+Flags breaking (REMOVED, SIGNATURE_CHANGED), logic (LOGIC_CHANGED), and additive (ADDED) changes.
 
-```text
-  STATUS  REPOSITORY       VERSION/COMMIT  STALENESS
-  ------  ----------       --------------  ---------
-  ✓       gopher-api       2a019f321162    up to date
-  ⚠       data-processor   568d8cd5539e    STALE (have 568d8cd, want 2a019f)
-```
+![diff output](assets/screenshots/diff.png)
 
-Use this to answer: _"Which services on `dev` haven't updated the shared library yet?"_
-
-### 3. Map sub-package imports
+### Impact — per-repo upgrade checklist
 
 ```bash
-depscanner scan --packages
+depscanner impact a1b2c3d4 e5f6a7b8 --branch dev-beta
 ```
 
-**Example Output:**
+Cross-references API diff with real call sites. Shows **ACTION REQUIRED** (consumer needs the fix) or **RESOLVED** (fix already applied, verified via `git merge-base --is-ancestor`).
 
-```text
-  my-cool-app        util, config, internal/core
-  gopher-api         util, database
-```
+![impact output](assets/screenshots/impact.png)
 
-### 4. Find call sites of a specific function
+When changes are additive only — no breaking or logic diffs — impact reports clean:
 
-```bash
-depscanner scan --func "logger.Info"
-```
+![clean impact output](assets/screenshots/impact-clean.png)
 
-**Example Output:**
+When a consumer org is unreachable (HTTP 404, token issues), the remaining consumers still get full analysis:
 
-```text
-  my-cool-app (2 call sites):
-    internal/app/main.go:42            logger.Info
-    internal/app/handler.go:18         logger.Info
-```
+![error-resilient impact output](assets/screenshots/impact-skip.png)
 
-### 5. Find usages of a specific type or interface
-
-```bash
-depscanner scan --type "Logger"
-# or with package qualifier:
-depscanner scan --type "logger.Logger"
-```
-
-Reports every repository that references the type, with file and line.
-
-### 6. Signature mismatch validation
-
-```bash
-depscanner scan --func "NewClient" --check
-```
-
-### 7. Detect API changes (diff)
-
-Compare the target module's API between two refs:
-
-```bash
-depscanner diff 1.0.0 1.1.0
-```
-
-**Example Output:**
-
-```text
-  ✗  REMOVED           core.OldFunction               [BREAKING]
-  ~  LOGIC_CHANGED     logger.Info                    [LOGIC]
-  +  ADDED             core.NewFunction               [additive]
-```
-
-- `✗ REMOVED/SIGNATURE_CHANGED`: Compatibility breaking changes.
-- `~ LOGIC_CHANGED`: Internal logic change without changing the signature (behavioral change).
-- `+ ADDED`: New symbol added (safe/additive).
-
-Use `--breaking-only` to filter to breaking changes only:
-
-```bash
-depscanner diff 1.0.0 1.1.0 --breaking-only
-```
-
-### 8. Analyze upgrade impact
-
-Generate a per-repo upgrade checklist based on API changes:
-
-```bash
-depscanner impact abc123 main
-```
-
-**Example Output:**
-
-```text
-✓ RESOLVED my-cool-app (current: ...-2a019f321162)
-  ✓ module/logger.Info — 2 call sites: (resolved in 97ce50f14a26)
-
-⚠ ACTION REQUIRED data-processor (current: ...-568d8cd5539e)
-  ~ module/logger.Info — 5 call sites: (needs commit 97ce50f14a26)
-      internal/worker/job.go:112    logger.Info
-```
-
-### 9. Diagnostic Mode
-
-If no impacts are found, depscanner provides a transparent breakdown of what was scanned:
-
-```text
-Checked 3 impactful symbols across all reservoirs:
-  ~ legacy.API.DeprecatedMethod: 0 call sites
-  ~ legacy.NewClient: 0 call sites
-  ✓ No consumers are actually affected by these changes.
-```
-
-- **RESOLVED**: Repository is using a version that already contains the fix (verified via git ancestry).
-- **ACTION REQUIRED**: Repository is still using an old version and is affected by the changes. Shows which commit contains the fix.
 
 ## Command Flags
 
-### Global (all commands)
+### Global (persistent across all commands)
 
-| Flag          | Description                                              |
-| ------------- | -------------------------------------------------------- |
-| `--config`    | Config file path (default: `~/.depscanner.yaml`)         |
-| `--cache-dir` | Override local repo cache directory                      |
-| `--format`    | Output format: `table` (default) or `json`               |
-| `--no-fetch`  | Skip git fetch, use cached repos only                    |
-| `--branch`    | Scan repositories on a specific branch                   |
+| Flag            | Scope    | Description                                              |
+| --------------- | -------- | -------------------------------------------------------- |
+| `--config`      | Persistent | Config file path (default: `./depscanner.yaml`, fallback `~/.depscanner.yaml`) |
+| `--cache-dir`   | Persistent | Override local repo clone cache directory                |
+| `--format`      | Persistent | Output format: `table` (default) or `json`               |
+| `--no-fetch`    | Persistent | Skip `git fetch`, use cached repos only                  |
+| `--branch`      | Persistent | **Consumer** branch to checkout/scan (e.g. `dev`, `main`). Without it, scans consumer repos at their `HEAD` — with it, switches each consumer to that branch for staleness check. |
 
 ### `scan`
 
-| Flag          | Description                                                                          |
-| ------------- | ------------------------------------------------------------------------------------ |
-| `--packages`  | Show which sub-packages of the target module are imported                               |
-| `--func`      | Find call sites of a function (e.g. `"Info"` or `"logger.Info"`)                       |
-| `--type`      | Find usages of a type or interface (e.g. `"Logger"` or `"logger.Logger"`)               |
-| `--check`     | Validate call-site arg counts against the target module's signature (requires `--func`) |
+Searches consumer repos for symbol references, staleness, and dependency info.
 
-### `diff <from> <to>`
+| Flag          | Description                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------ |
+| `--packages`  | Show which sub-packages of the **source** module each consumer imports                      |
+| `--func`      | Find call sites of function(s), comma-separated (e.g. `"Must,helper.Process"`)               |
+| `--method`    | Find call sites of method(s), comma-separated (e.g. `"Client.Do,Conn.Close"`)               |
+| `--type`      | Find usages of type/interface(s), comma-separated (e.g. `"Logger,Config"`)                   |
+| `--const`     | Find references to constant(s), comma-separated (e.g. `"ErrNotFound,StatusOK"`)              |
+| `--var`       | Find references to package-level variable(s), comma-separated (e.g. `"DefaultClient"`)       |
+| `--check`     | Validate call-site arg counts against source module's signature (requires exactly one `--func`) |
 
-| Flag              | Description                          |
-| ----------------- | ------------------------------------ |
-| `--breaking-only` | Show only breaking changes           |
+Positional args: none. Config defines source module and consumer orgs.
 
-### `impact <from> <to>`
+### `diff <from-ref> <to-ref>`
 
-No additional flags. `<from>` and `<to>` are git refs (commit hash, tag, or branch name).
+Compares symbol index between two refs of the **source** module. Ref can be commit hash, tag, or branch name.
 
-## Output Formats
+| Flag              | Description                                             |
+| ----------------- | ------------------------------------------------------- |
+| `--breaking-only` | Show only breaking changes (filter out additive/logic)  |
+| `--source`        | Source module name (required when multi-source config)  |
 
-- **Table** (default): Human-readable terminal output with colored status icons.
-- **JSON** (`--format json`): Machine-readable output for CI/CD pipelines and scripting.
+### `impact <from-ref> <to-ref>`
+
+Cross-references `diff` results against consumer call sites. Ref same as `diff`.
+
+| Flag          | Description                                            |
+| ------------- | ------------------------------------------------------ |
+| `--source`    | Source module name (required when multi-source config) |
+
+### `unshallow`
+
+Deepens all shallow consumer clones for resolution tracking.
+
+No flags.
 
 ## Example Workflow
 
@@ -278,10 +246,10 @@ No additional flags. `<from>` and `<to>` are git refs (commit hash, tag, or bran
 depscanner scan
 
 # 2. Compare API between versions
-depscanner diff --from v1.0.0 --to v1.2.0
+depscanner diff v1.0.0 v1.2.0
 
 # 3. See which repos are affected and need fixes
-depscanner impact --from v1.0.0 --to v1.2.0
+depscanner impact v1.0.0 v1.2.0
 
 # Output shows:
 # ✓ RESOLVED api-app (already on v1.2.0 — safe)
@@ -290,17 +258,6 @@ depscanner impact --from v1.0.0 --to v1.2.0
 ```
 
 This takes the guesswork out of: "Can we update this lib? Which repos need attention? What exactly will break?"
-
-## How it Works
-
-1. **Discovery**: Fetches repository list via Gitea API.
-2. **Syncing**: Concurrently clones/fetches repositories into a local cache.
-3. **Pipelining**: Analyzes each repository immediately as it finishes syncing.
-4. **Analysis**:
-   - Parses `go.mod` for dependency versions.
-   - Performs two-pass AST scanning for call-site detection.
-   - Builds a full symbol index for structural and behavioral diffing.
-   - **Surgical Resolution Tracking**: Uses `git log -L` and automated ancestry verification (with auto-unshallowing) to determine if a fix has been applied.
 
 ## Testing
 
@@ -324,8 +281,8 @@ go test ./... -cover
 
 **Current coverage:**
 
-- `internal/analysis`: 48.7% (diff, impact, version, gomod parsing)
-- `internal/config`: 86.0% (config loading, validation, env expansion)
+- `internal/analysis`: 78.7% (diff, impact, version, gomod parsing)
+- `internal/config`: 82.2% (config loading, validation, env expansion)
 - `internal/gitea`: 90.7% (Gitea API client mocking)
 
 Tests include:
@@ -337,11 +294,15 @@ Tests include:
 - Symbol diffing (breaking changes, logic changes, interface modifications)
 - Impact analysis (call site matching, repo sorting, summary generation)
 
-## Requirements
+## Troubleshooting
 
-- Go 1.22+
-- Git
-- Gitea API token with read access
+| Problem | Likely cause | Fix |
+|---------|-------------|-----|
+| `git pull` complains about rebase after scan | Depscanner does shallow fetch, history diverges from origin | Run `depscanner unshallow` or `git config pull.rebase false` |
+| `STALE` on all repos | `--branch` not set or branch name mismatch | Pass `--branch dev` matching your workflow branch |
+| `skip consumer ... HTTP 404` | Config org name wrong, or token lacks access | Verify org in config and token scopes |
+| Config not found | File named `depscanner.yaml` vs `.depscanner.yaml` | Try `--config ./depscanner.yaml` |
+| High disk usage | Default cache dir duplicates existing clones | Set `cache_dir` to existing workspace root (see Cache dir) |
 
 ## Roadmap
 

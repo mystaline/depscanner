@@ -217,15 +217,24 @@ func parseModuleOwner(modulePath string) (owner, repo string) {
 	return parts[len(parts)-2], parts[len(parts)-1]
 }
 
-// Load reads the config file at path (default: ~/.depscanner.yaml if empty).
+// Load reads the config file at path. Resolution order:
+//  1. Explicit --config path (if non-empty)
+//  2. ./depscanner.yaml (cwd)
+//  3. $HOME/.depscanner.yaml
+//  4. Defaults (no file at all)
 // ${ENV_VAR} placeholders are expanded before YAML parsing.
 func Load(path string) (*Config, error) {
 	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("get home dir: %w", err)
+		// try cwd first
+		if _, err := os.Stat("depscanner.yaml"); err == nil {
+			path = "depscanner.yaml"
+		} else {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, fmt.Errorf("get home dir: %w", err)
+			}
+			path = filepath.Join(home, ".depscanner.yaml")
 		}
-		path = filepath.Join(home, ".depscanner.yaml")
 	}
 
 	data, err := os.ReadFile(path)

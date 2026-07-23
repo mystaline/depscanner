@@ -39,13 +39,16 @@ var (
 func init() {
 	formatter = NewOutputFormatter()
 
-	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "", "config file (default: $HOME/.depscanner.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "", "config file (default: ./depscanner.yaml, fallback $HOME/.depscanner.yaml)")
 	rootCmd.PersistentFlags().StringVar(&cacheDir, "cache-dir", "", "local repo cache directory (overrides config)")
 	rootCmd.PersistentFlags().StringVar(&format, "format", "table", "output format: table | json")
 	rootCmd.PersistentFlags().BoolVar(&noFetch, "no-fetch", false, "skip git fetch, use cached repos only")
 	rootCmd.PersistentFlags().StringVar(&branch, "branch", "", "scan repositories on a specific branch")
 
 	rootCmd.AddCommand(newScanCmd())
+
+	newInit := newInitCmd()
+	rootCmd.AddCommand(newInit)
 
 	newDiff := newDiffCmd()
 	newDiff.Flags().StringVar(&sourceFlag, "source", "", "source module to analyze (required when multiple sources are configured)")
