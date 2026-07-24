@@ -49,7 +49,21 @@ func ResolveProvider(p config.Provider, cacheDir string, offline bool, newLister
 				return Resolved{}, fmt.Errorf("list repos for %s: %w", g.Org, err)
 			}
 		}
-		repos = filterReposByName(repos, g.IncludeRepos, g.ExcludeRepos)
+		if g.Repo != "" {
+			var found bool
+			for _, r := range repos {
+				if r.Name == g.Repo {
+					repos = []gitea.Repository{r}
+					found = true
+					break
+				}
+			}
+			if !found {
+				return Resolved{}, fmt.Errorf("repo %q not found in org %q (%d repos total)", g.Repo, g.Org, len(repos))
+			}
+		} else {
+			repos = filterReposByName(repos, g.IncludeRepos, g.ExcludeRepos)
+		}
 		return Resolved{Group: g.Org, Mgr: mgr, Repos: repos}, nil
 
 	case "git":

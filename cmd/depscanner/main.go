@@ -39,7 +39,8 @@ var (
 func init() {
 	formatter = NewOutputFormatter()
 
-	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "", "config file (default: ./depscanner.yaml, fallback $HOME/.depscanner.yaml)")
+	rootCmd.PersistentFlags().
+		StringVar(&cfgPath, "config", "", "config file (default: ./.depscanner.yaml, fallback $HOME/.depscanner.yaml)")
 	rootCmd.PersistentFlags().StringVar(&cacheDir, "cache-dir", "", "local repo cache directory (overrides config)")
 	rootCmd.PersistentFlags().StringVar(&format, "format", "table", "output format: table | json")
 	rootCmd.PersistentFlags().BoolVar(&noFetch, "no-fetch", false, "skip git fetch, use cached repos only")
@@ -51,11 +52,13 @@ func init() {
 	rootCmd.AddCommand(newInit)
 
 	newDiff := newDiffCmd()
-	newDiff.Flags().StringVar(&sourceFlag, "source", "", "source module to analyze (required when multiple sources are configured)")
+	newDiff.Flags().
+		StringVar(&sourceFlag, "source", "", "source module to analyze (required when multiple sources are configured)")
 	rootCmd.AddCommand(newDiff)
 
 	newImpact := newImpactCmd()
-	newImpact.Flags().StringVar(&sourceFlag, "source", "", "source module to analyze (required when multiple sources are configured)")
+	newImpact.Flags().
+		StringVar(&sourceFlag, "source", "", "source module to analyze (required when multiple sources are configured)")
 	rootCmd.AddCommand(newImpact)
 
 	rootCmd.AddCommand(newUnshallowCmd())

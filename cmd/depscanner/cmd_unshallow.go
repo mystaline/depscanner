@@ -37,9 +37,9 @@ Next sync without --no-fetch will re-shallow automatically.`,
 
 			timeout := time.Duration(timeoutMin) * time.Minute
 			if len(args) == 1 {
-				return unshallowFind(cfg.CacheDir, args[0], timeout, cfg.UnshallowBranches)
+				return unshallowFind(cfg.CacheDir, args[0], timeout, cfg.ResolveUnshallowBranches(""))
 			}
-			return unshallowAllOrgs(cfg.CacheDir, timeout, cfg.UnshallowBranches)
+			return unshallowAllOrgs(cfg.CacheDir, timeout, cfg.ResolveUnshallowBranches(""))
 		},
 	}
 	cmd.Flags().IntVar(&timeoutMin, "timeout", 30, "per-repo timeout in minutes")

@@ -14,11 +14,7 @@ func selectSource(cfg *config.Config, name string) (config.Source, error) {
 		return config.Source{}, fmt.Errorf("--source is required (%d sources configured)", len(cfg.Sources))
 	}
 	for _, s := range cfg.Sources {
-		label := s.Name
-		if label == "" {
-			label, _ = s.Group()
-		}
-		if label == name {
+		if s.Label() == name {
 			return s, nil
 		}
 	}

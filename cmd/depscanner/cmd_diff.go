@@ -48,6 +48,9 @@ func runDiff(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve source: %w", err)
 	}
+	if len(res.Repos) != 1 {
+		return fmt.Errorf("source resolves to %d repos; expected exactly 1 (check repo/include_repos in config)", len(res.Repos))
+	}
 	targetRepo := res.Repos[0].Name
 	mgr := res.Mgr
 	repoPath := mgr.GetRepoPath(targetRepo)
@@ -76,7 +79,7 @@ func runDiff(_ *cobra.Command, args []string) error {
 	// never run remote git operations against the user's live local checkout.
 	if !res.Local && !cfg.Offline {
 		fmt.Printf("Fetching history for %s...\n", targetRepo)
-		unshallowTargetRepo(repoPath, defaultUnshallowTimeout, cfg.UnshallowBranches)
+		unshallowTargetRepo(repoPath, defaultUnshallowTimeout, cfg.ResolveUnshallowBranches(""))
 	}
 
 	// Phase A

@@ -44,6 +44,41 @@ func TestResolveGitProvider(t *testing.T) {
 	}
 }
 
+func TestResolveGiteaRepo(t *testing.T) {
+	fake := fakeLister{repos: []gitea.Repository{
+		{Name: "svc-a", CloneURL: "https://h/org/svc-a"},
+		{Name: "svc-b", CloneURL: "https://h/org/svc-b"},
+		{Name: "docs", CloneURL: "https://h/org/docs"},
+	}}
+
+	// Repo exact match
+	p := config.Provider{Gitea: &config.GiteaProvider{URL: "https://h", Token: "t", Org: "org-a", Repo: "svc-a"}}
+	got, err := ResolveProvider(p, "/cache", false, func(string, string) Lister { return fake })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Repos) != 1 || got.Repos[0].Name != "svc-a" {
+		t.Fatalf("repos = %+v, want [svc-a]", got.Repos)
+	}
+
+	// Repo not found → error
+	p2 := config.Provider{Gitea: &config.GiteaProvider{URL: "https://h", Token: "t", Org: "org-a", Repo: "nonexistent"}}
+	_, err = ResolveProvider(p2, "/cache", false, func(string, string) Lister { return fake })
+	if err == nil {
+		t.Fatal("expected error for missing repo")
+	}
+
+	// IncludeRepos still works (consumer path) when Repo is empty
+	p3 := config.Provider{Gitea: &config.GiteaProvider{URL: "https://h", Token: "t", Org: "org-a", IncludeRepos: []string{"svc-*"}}}
+	got3, err := ResolveProvider(p3, "/cache", false, func(string, string) Lister { return fake })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got3.Repos) != 2 {
+		t.Fatalf("repos = %+v, want 2 (svc-a, svc-b)", got3.Repos)
+	}
+}
+
 func TestResolvePathProvider(t *testing.T) {
 	dir := t.TempDir() // .../base
 	p := config.Provider{Path: dir}

@@ -319,10 +319,7 @@ func resolveSourceModule(s config.Source, cfg *config.Config, factory repo.Liste
 	if rerr != nil {
 		return rs, rerr
 	}
-	rs.name = s.Name
-	if rs.name == "" {
-		rs.name = res.Group
-	}
+	rs.name = s.Label()
 
 	module := s.Module
 	repoName := res.Repos[0].Name

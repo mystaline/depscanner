@@ -52,6 +52,9 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve source: %w", err)
 	}
+	if len(res.Repos) != 1 {
+		return fmt.Errorf("source resolves to %d repos; expected exactly 1 (check repo/include_repos in config)", len(res.Repos))
+	}
 	targetRepo := res.Repos[0].Name
 	mgr := res.Mgr
 	targetRepoPath := mgr.GetRepoPath(targetRepo)
@@ -79,9 +82,13 @@ func runImpact(cmd *cobra.Command, args []string) error {
 
 	// Ensure target repo is updated and unshallowed for ancestry checks (if online)
 	if !res.Local && !noFetch {
-		unshallowTargetRepo(targetRepoPath, defaultUnshallowTimeout, cfg.UnshallowBranches)
+		targetBranch := ""
 		if branch != "" {
-			// Ensure the specific branch we are interested in is fetched
+			targetBranch = cfg.GetBranchForRepo(targetRepo, branch)
+		}
+		unshallowBranches := cfg.ResolveUnshallowBranches(targetBranch)
+		unshallowTargetRepo(targetRepoPath, defaultUnshallowTimeout, unshallowBranches)
+		if branch != "" {
 			_ = exec.Command("git", "-C", targetRepoPath, "fetch", "origin", branch+":"+branch, "--quiet").Run()
 		}
 		_ = exec.Command("git", "-C", targetRepoPath, "fetch", "--all", "--tags", "--quiet").Run()
