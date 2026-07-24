@@ -1,71 +1,77 @@
-# depscanner configuration
-# Copy to ~/.depscanner.yaml and fill in your values.
+# depscanner configuration — copy to ~/.depscanner.yaml or ./depscanner.yaml
 #
 # Environment variables are expanded inline — use ${VAR_NAME} syntax.
 # Example: token: "${GITEA_TOKEN}"
+#
+# ── HOW TO SET THIS UP ──────────────────────────────────────────
+# Before running depscanner, fill in every field with your real values.
+#
+# 1. Get a Gitea API token: Settings → Applications → Manage Access Tokens
+# 2. Export as env var: export GITEA_TOKEN="your_token_here"
+# 3. Find your org name (the Gitea organization that owns the repos)
+# 4. Find your source repo name (the shared library you want to track)
+#
+# Then run: depscanner scan
+# ────────────────────────────────────────────────────────────────
 
-gitea:
-  url: "https://gitea.example.com"
-  token: "${YOUR_GITEA_TOKEN}" # Token with read access to organization and repositories
-  org: "my-org"
+# ── SOURCES ─────────────────────────────────────────────────────
+# The shared library ("source of truth") you want to track.
+# Depscanner will diff this repo's API and scan consumers for usage.
+sources:
+  # url:    Your Gitea instance URL (e.g. "https://gitea.example.com")
+  # token:  Gitea API token — use ${GITEA_TOKEN} env var, don't paste raw
+  # org:    Gitea organization that owns this repo
+  # repo:   Exact repo name inside that org (not URL, just name like "my-lib")
+  - gitea: { url: "https://gitea.example.com", token: "${GITEA_TOKEN}", org: "my-org", repo: "my-lib" }
 
-# Multi-org mode: replace gitea.org with gitea.orgs (per-org include/exclude are optional)
-# gitea:
-#   orgs:
-#     - name: org-a
-#       include_repos:
-#         - shared-settings
-#     - name: org-b
-#       include_repos:
-#         - svc-a
-#         - svc-a-template
-#       exclude_repos:
-#         - svc-a-old
+    # module: Optional. Full Go module path (e.g. "gitea.example.com/my-org/my-lib").
+    #         Depscanner auto-reads this from the repo's go.mod when omitted.
+    #         Set it only if the go.mod path differs from the default.
+    # module: "gitea.example.com/my-org/my-lib"
 
-# Module path of the shared library to scan for.
-target_module: "gitea.example.com/my-org/shared-lib"
+  # Add more sources if you track multiple independent libraries.
+  # Each source = one shared library in one repo.
+  # - gitea: { url: ..., token: ${GITEA_TOKEN}, org: another-org, repo: lib-two }
+  # - path: ~/Workspace/.../local-lib       # local checkout, used in place (no clone)
 
-# Local directory where repos are cloned/cached.
+# ── CONSUMERS ───────────────────────────────────────────────────
+# The services/applications that might import your source library.
+# Depscanner scans every repo in these orgs for dependency usage.
+consumers:
+  # Same fields as source (url, token, org).
+  # exclude_repos: Optional. Repos to skip (docs, config repos, etc.).
+  #                Supports glob patterns: *, ?, [...]
+  - gitea: { url: "https://gitea.example.com", token: "${GITEA_TOKEN}", org: "my-org", exclude_repos: [docs] }
+
+  # Consumers can span different orgs or be local paths:
+  # - gitea: { url: ..., token: ${GITEA_TOKEN}, org: partner-org, exclude_repos: [docs] }
+  # - path: ~/Workspace/.../some-service     # scan a local checkout instead
+
+# ── CACHE DIRECTORY ────────────────────────────────────────────
+# Where depscanner clones repos for scanning.
+# Default: ~/.depscanner/repos (throwaway cache, you never touch these).
+# If your workspace already has <org>/<repo> layout, point this at your
+# workspace root to avoid duplicating clones on disk.
 cache_dir: "~/.depscanner/repos"
 
-# Branch to clone/track (default: main).
-# default_branch: "main"
+# ── BRANCH TRACKING ────────────────────────────────────────────
+# Maps consumer branches → source branches for staleness checks.
+# Used when you pass --branch <key> to scan.
+# Example: --branch dev checks consumers' "dev" branch against source's "dev" branch.
+# Format: consumer_branch_name: source_branch_name
+branch_tracking:
+  dev: dev
+  staging: staging
+  main: main
 
-# Optional: scan only these repos (empty = all repos in org).
-# include_repos:
-#   - service-a
-#   - service-b
-
-# Branch tracking: repo branch -> target module branch.
-# Used with --branch to detect staleness against the correct shared-lib branch.
-# Default: dev->dev, staging->staging, main->main
-# branch_tracking:
-#   dev: dev
-#   staging: staging
-#   main: main
-
-# Skip repos that are definitely not relevant Go services.
-# Supports glob patterns: *, ?, [...]
-exclude_repos:
-  - docs
-  # - "*-temp"       # exclude all repos ending in -temp
-  # - "legacy-*"   # exclude all repos starting with legacy-
-
-# --- Multi-source mode (Phase B) ---
-# Declare N sources of truth and a consumer pool. Every consumer is scanned for
-# calls to any source. Results are grouped by source and by org/group.
-# Legacy `target_module` + `gitea.org(s)` above still works and is auto-mapped.
+# ── LEGACY SINGLE-SOURCE MODE (alternative) ────────────────────
+# Instead of sources/consumers above, you can use this simpler form
+# when tracking exactly one library against one org:
 #
-# sources:
-#   - name: acme-lib
-#     gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: org-a }
-#     module: gitea.example.com/org-a/acme-lib   # optional; read from go.mod if omitted
-#   - name: acme-core
-#     path: ~/Workspace/.../acme-core           # local checkout, used in place
-#
-# consumers:
-#   - gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: org-a }
-#   - gitea: { url: https://gitea.example.com, token: ${GITEA_TOKEN}, org: org-b, exclude_repos: [docs] }
-#   - path: ~/Workspace/.../some-service
-#
-# diff/impact select one source:  depscanner diff --source acme-lib <from> <to>
+# gitea:
+#   url: "https://gitea.example.com"
+#   token: "${GITEA_TOKEN}"
+#   org: "my-org"
+# target_module: "gitea.example.com/my-org/shared-lib"
+# exclude_repos:
+#   - docs

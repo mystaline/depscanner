@@ -84,36 +84,51 @@ depscanner init  # writes depscanner.yaml
 Or place at `$HOME/.depscanner.yaml` for a global default shared across projects.
 
 ```yaml
-# Track N shared libraries against a consumer pool.
+# ── SOURCES ─────────────────────────────────────────────────────
+# The shared library ("source of truth") you want to track.
+# Depscanner diffs this repo's API and scans consumers for usage.
 sources:
-  - name: awesomelib
-    gitea: { url: https://gitea.com, token: ${GITEA_TOKEN}, org: my-org }
-    module: github.com/my-org/awesome-lib
+  # url:    Your Gitea instance URL (e.g. "https://gitea.example.com")
+  # token:  Gitea API token — use ${GITEA_TOKEN} env var, don't paste raw
+  # org:    Gitea organization that owns this repo
+  # repo:   Exact repo name inside that org (not URL, just name like "my-lib")
+  - gitea: { url: "https://gitea.example.com", token: "${GITEA_TOKEN}", org: "my-org", repo: "my-lib" }
 
-  # More sources (or just one). Each tracks independent libs.
-  # - name: coreutils
-  #   gitea: { url: ..., token: ${GITEA_TOKEN}, org: another-org }
+    # module: Optional. Full Go module path (e.g. "gitea.example.com/my-org/my-lib").
+    #         Depscanner auto-reads this from the repo's go.mod when omitted.
+    #         Set it only if the go.mod path differs from the default.
+    # module: "gitea.example.com/my-org/my-lib"
 
-# Services to scan for usages of any source.
+  # Add more sources if you track multiple independent libraries.
+  # - gitea: { url: ..., token: ${GITEA_TOKEN}, org: another-org, repo: lib-two }
+
+# ── CONSUMERS ───────────────────────────────────────────────────
+# The services/applications that might import your source library.
+# Depscanner scans every repo in these orgs for dependency usage.
 consumers:
-  - gitea: { url: https://gitea.com, token: ${GITEA_TOKEN}, org: my-org }
+  # Same fields as source (url, token, org).
+  # exclude_repos: Optional. Repos to skip (docs, config repos, etc.).
+  #                Supports glob patterns: *, ?, [...]
+  - gitea: { url: "https://gitea.example.com", token: "${GITEA_TOKEN}", org: "my-org", exclude_repos: [docs] }
 
-  # Consumers can span orgs:
+  # Consumers can span different orgs or be local paths:
   # - gitea: { url: ..., token: ${GITEA_TOKEN}, org: partner-org, exclude_repos: [docs] }
-  # - path: ~/Workspace/my-service          # local checkout
+  # - path: ~/Workspace/my-service          # scan a local checkout instead
 
+# ── CACHE DIRECTORY ────────────────────────────────────────────
+# Where depscanner clones repos for scanning.
+# Default: ~/.depscanner/repos (throwaway cache, you never touch these).
+# If your workspace already has <org>/<repo> layout, point this at your
+# workspace root to avoid duplicating clones on disk.
 cache_dir: "~/.depscanner/repos"
 
-# Branch tracking: consumer branch → source branch.
-# Used with --branch for staleness checks.
+# ── BRANCH TRACKING ────────────────────────────────────────────
+# Maps consumer branches → source branches for staleness checks.
+# Used when you pass --branch <key> to scan.
+# Example: --branch dev checks consumers' "dev" branch against source's "dev" branch.
 branch_tracking:
   dev: dev
   main: main
-
-# Exclusion is shared
-exclude_repos:
-  - junk
-  - "test-*"
 ```
 
 Each provider (`sources`/`consumers`) uses exactly one of:
@@ -142,7 +157,9 @@ Repos in output get one of these status indicators:
 
 ### Cache dir
 
-Default `~/.depscanner/repos` stores all clones under `<your-target-dir>/<org>/<repo>`. If your workspace uses the same `<org>/<repo>` layout, point `cache_dir` at your workspace root (e.g. `~/Workspace/<scope-or-stakeholder>/backend-codebase`) — depscanner syncs into your existing checkout tree, no duplication. Run `depscanner unshallow` to deepen history if `git pull` ever complains about shallow refs.
+Default `~/.depscanner/repos` is a throwaway clone cache — depscanner shallow-clones repos here, scans them, and you never touch these copies yourself. No `unshallow` needed.
+
+If your workspace already uses `<org>/<repo>` layout, point `cache_dir` at that workspace root (e.g. `~/Workspace/backend-codebase`) to avoid duplication. In that case you *are* working in those repos, so run `depscanner unshallow` to deepen history — otherwise `git pull` and `git log` will complain about shallow refs.
 
 
 ## Usage
@@ -233,9 +250,12 @@ Cross-references `diff` results against consumer call sites. Ref same as `diff`.
 
 ### `unshallow`
 
-Deepens all shallow consumer clones for resolution tracking.
+Deepens shallow clones so `git merge-base --is-ancestor` can trace full history. Unnecessary under normal use — depscanner clones repos shallow into `cache_dir` and you never interact with those copies directly. Only run `unshallow` when:
 
-No flags.
+- `cache_dir` is your actual working directory (e.g. `~/Workspace/backend-codebase`) where you code and run `git log`/`git branch`/`git pull`.
+- `impact` resolution tracking fails with ancestry errors on the branch you're analyzing.
+
+No flags. Branches unshallowed are derived from `branch_tracking` values.
 
 ## Example Workflow
 
@@ -298,7 +318,7 @@ Tests include:
 
 | Problem | Likely cause | Fix |
 |---------|-------------|-----|
-| `git pull` complains about rebase after scan | Depscanner does shallow fetch, history diverges from origin | Run `depscanner unshallow` or `git config pull.rebase false` |
+| `git pull` or `git log` occasionally fails in a cached repo (config rebase, shallow refs) | `cache_dir` points at your working directory, repos are shallow | Run `depscanner unshallow` to deepen history |
 | `STALE` on all repos | `--branch` not set or branch name mismatch | Pass `--branch dev` matching your workflow branch |
 | `skip consumer ... HTTP 404` | Config org name wrong, or token lacks access | Verify org in config and token scopes |
 | Config not found | File named `depscanner.yaml` vs `.depscanner.yaml` | Try `--config ./depscanner.yaml` |

@@ -11,69 +11,85 @@ const scaffoldConfig = `# depscanner configuration
 #
 # Environment variables are expanded inline — use ${VAR_NAME} syntax.
 # Example: token: "${GITEA_TOKEN}"
+#
+# ── HOW TO SET THIS UP ──────────────────────────────────────────
+# Before running depscanner, fill in every field with your real values.
+# Each section below explains what to put.
+#
+# 1. Get a Gitea API token: Settings → Applications → Manage Access Tokens
+# 2. Export as env var: export GITEA_TOKEN="your_token_here"
+# 3. Find your org name (the Gitea organization that owns the repos)
+# 4. Find your source repo name (the shared library you want to track)
+#
+# Then run: depscanner scan
+# ────────────────────────────────────────────────────────────────
 
-# Track N shared libraries against a consumer pool.
+# ── SOURCES ─────────────────────────────────────────────────────
+# The shared library ("source of truth") you want to track.
+# Depscanner will diff this repo's API and scan consumers for usage.
 sources:
-  - name: my-lib
-    gitea: { url: "https://gitea.example.com", token: "${YOUR_GITEA_TOKEN}", org: "my-org" }
-    module: "gitea.example.com/my-org/my-lib"
+  # url:    Your Gitea instance URL (e.g. "https://gitea.example.com")
+  # token:  Gitea API token — use ${GITEA_TOKEN} env var, don't paste raw
+  # org:    Gitea organization that owns this repo
+  # repo:   Exact repo name inside that org (not URL, just name like "my-lib")
+  - gitea: { url: "https://gitea.example.com", token: "${GITEA_TOKEN}", org: "my-org", repo: "my-lib" }
 
-  # More sources (or just one). Each tracks independent libs.
-  # - name: lib-two
-  #   gitea: { url: ..., token: ${GITEA_TOKEN}, org: another-org }
+    # module: Optional. Full Go module path (e.g. "gitea.example.com/my-org/my-lib").
+    #         Depscanner auto-reads this from the repo's go.mod when omitted.
+    #         Set it only if the go.mod path differs from the default.
+    # module: "gitea.example.com/my-org/my-lib"
 
-# Services to scan for usages of any source.
+  # Add more sources if you track multiple independent libraries.
+  # Each source = one shared library in one repo.
+  # - gitea: { url: ..., token: ${GITEA_TOKEN}, org: another-org, repo: lib-two }
+
+# ── CONSUMERS ───────────────────────────────────────────────────
+# The services/applications that might import your source library.
+# Depscanner scans every repo in these orgs for dependency usage.
 consumers:
-  - gitea: { url: "https://gitea.example.com", token: "${YOUR_GITEA_TOKEN}", org: "my-org" }
+  # Same fields as source (url, token, org).
+  # exclude_repos: Optional. Repos to skip (docs, config repos, etc.).
+  #                Supports glob patterns: *, ?, [...]
+  - gitea: { url: "https://gitea.example.com", token: "${GITEA_TOKEN}", org: "my-org", exclude_repos: [docs] }
 
-  # Consumers can span orgs:
+  # Consumers can span different orgs or be local paths:
   # - gitea: { url: ..., token: ${GITEA_TOKEN}, org: partner-org, exclude_repos: [docs] }
-  # - path: ~/Workspace/my-service          # local checkout
+  # - path: ~/Workspace/my-service          # scan a local checkout instead
 
-# Local directory where repos are cloned/cached under <org>/<repo>.
+# ── CACHE DIRECTORY ────────────────────────────────────────────
+# Where depscanner clones repos for scanning.
+# Default: ~/.depscanner/repos (throwaway cache, you never touch these).
+# If your workspace already has <org>/<repo> layout, point this at your
+# workspace root to avoid duplicating clones on disk.
 cache_dir: "~/.depscanner/repos"
 
-# Branch tracking: consumer branch → source branch.
-# Used with --branch for staleness checks.
+# ── BRANCH TRACKING ────────────────────────────────────────────
+# Maps consumer branches → source branches for staleness checks.
+# Used when you pass --branch <key> to scan.
+# Example: --branch dev checks consumers' "dev" branch against source's "dev" branch.
+# Format: consumer_branch_name: source_branch_name
 branch_tracking:
   dev: dev
   staging: staging
   main: main
 
-# Only scan repos matching these glob patterns (empty = all).
-# include_repos:
-#   - service-a
-#   - service-b
-
-# Skip repos that are definitely not relevant Go services.
-# Supports glob patterns: *, ?, [...]
-exclude_repos:
-  - docs
-
-# --- Legacy single-source mode ---
-# Replace sources/consumers above with these two if you prefer:
-# gitea:
-#   url: "https://gitea.example.com"
-#   token: "${YOUR_GITEA_TOKEN}"
-#   org: "my-org"
-# target_module: "gitea.example.com/my-org/my-lib"
 `
 
 func newInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
-		Short: "Write scaffold config to ./depscanner.yaml",
-		Long: `Creates depscanner.yaml in the current directory with common defaults.
+		Short: "Write scaffold config to ./.depscanner.yaml",
+		Long: `Creates .depscanner.yaml in the current directory with common defaults.
 Edit the file with your Gitea URL, token, and org before running scan.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if _, err := os.Stat("depscanner.yaml"); err == nil {
-				return fmt.Errorf("depscanner.yaml already exists in current directory")
+			if _, err := os.Stat(".depscanner.yaml"); err == nil {
+				return fmt.Errorf(".depscanner.yaml already exists in current directory")
 			}
-			if err := os.WriteFile("depscanner.yaml", []byte(scaffoldConfig), 0644); err != nil {
+			if err := os.WriteFile(".depscanner.yaml", []byte(scaffoldConfig), 0644); err != nil {
 				return fmt.Errorf("write config: %w", err)
 			}
-			fmt.Println("Wrote depscanner.yaml — edit it with your Gitea URL, token, and org.")
+			fmt.Println("Wrote .depscanner.yaml — edit it with your Gitea URL, token, and org.")
 			return nil
 		},
 	}
