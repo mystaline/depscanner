@@ -314,15 +314,15 @@ func TestSplitSymbolKey(t *testing.T) {
 func TestCountTotalImpactedSites(t *testing.T) {
 	impacts := []RepoImpact{
 		{
-			RepoName: "app1",
+			RepoName:   "app1",
 			TotalSites: 2,
 		},
 		{
-			RepoName: "app2",
+			RepoName:   "app2",
 			TotalSites: 5,
 		},
 		{
-			RepoName: "app3",
+			RepoName:   "app3",
 			TotalSites: 1,
 		},
 	}

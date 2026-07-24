@@ -10,10 +10,10 @@ import (
 
 func TestListOrgRepos(t *testing.T) {
 	tests := []struct {
-		name          string
-		handler       http.HandlerFunc
-		expectRepos   int
-		expectError   bool
+		name            string
+		handler         http.HandlerFunc
+		expectRepos     int
+		expectError     bool
 		expectRepoNames []string
 	}{
 		{
@@ -34,7 +34,7 @@ func TestListOrgRepos(t *testing.T) {
 					json.NewEncoder(w).Encode([]Repository{})
 				}
 			},
-			expectRepos: 2,
+			expectRepos:     2,
 			expectRepoNames: []string{"repo1", "repo2"},
 		},
 		{
@@ -59,7 +59,7 @@ func TestListOrgRepos(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(repos)
 			},
-			expectRepos: 3,
+			expectRepos:     3,
 			expectRepoNames: []string{"repo1", "repo2", "repo3"},
 		},
 		{

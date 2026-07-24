@@ -116,13 +116,13 @@ func TestMatchCallExpr(t *testing.T) {
 			name:         "shadowed variable (different alias)",
 			funcName:     "Conflict",
 			expr:         "myVar.Conflict", // myVar is not in aliasMap
-			wantResolved: "", // Should not match plain symbol if it's a selector on unknown object
+			wantResolved: "",               // Should not match plain symbol if it's a selector on unknown object
 			wantRaw:      "",
 		},
 		{
 			name:         "nested in complex expression (no match)",
 			funcName:     "Process",
-			expr:         "db.Query().util.Process()", 
+			expr:         "db.Query().util.Process()",
 			wantResolved: "", // util here is a field, not a package alias at root
 			wantRaw:      "",
 		},
@@ -136,7 +136,7 @@ func TestMatchCallExpr(t *testing.T) {
 				// but for most simple expressions ParseExpr is enough.
 				t.Fatalf("ParseExpr(%q) failed: %v", tt.expr, err)
 			}
-			
+
 			// We need a helper to find the target node within the parsed expression tree
 			var foundResolved, foundRaw string
 			var walk func(n ast.Node, insideSelector bool)
@@ -175,7 +175,7 @@ func TestMatchCallExpr(t *testing.T) {
 			walk(parsed, false)
 
 			if foundResolved != tt.wantResolved || foundRaw != tt.wantRaw {
-				t.Errorf("%s: match failed\nexpr: %s\ngot:  (%q, %q)\nwant: (%q, %q)", 
+				t.Errorf("%s: match failed\nexpr: %s\ngot:  (%q, %q)\nwant: (%q, %q)",
 					tt.name, tt.expr, foundResolved, foundRaw, tt.wantResolved, tt.wantRaw)
 			}
 		})
@@ -239,12 +239,12 @@ func fromOtherFile() {
 		funcName string
 		wantMin  int
 	}{
-		{"plain func (multi-file)", "Must", 3},    // main ×2 + other.go
+		{"plain func (multi-file)", "Must", 3}, // main ×2 + other.go
 		{"qualified func", "util.Must", 3},
-		{"func in another pkg", "DoWork", 2},       // main + nested
+		{"func in another pkg", "DoWork", 2}, // main + nested
 		{"qualified other pkg", "helper.DoWork", 2},
-		{"func returning value", "Calculate", 2},    // main + nested
-		{"func with single arg", "Format", 2},       // main + nested
+		{"func returning value", "Calculate", 2}, // main + nested
+		{"func with single arg", "Format", 2},    // main + nested
 		{"dot import func", "BareFunc", 1},
 		{"qualified dot import", "dot.BareFunc", 0},
 		{"nonexistent func", "NoSuchFunc", 0},

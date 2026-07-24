@@ -155,38 +155,24 @@ func runScan(_ *cobra.Command, _ []string) error {
 		if len(sources) != 1 {
 			return fmt.Errorf("--check requires exactly one source")
 		}
-		targetOwner, targetRepo := gitea.ParseModuleOwnerRepo(sources[0].module)
-		if targetOwner != "" {
-			targetMgr := repo.NewManager(cfg.CacheDir, targetOwner)
-			targetPath := targetMgr.GetRepoPath(targetRepo)
-			if !cfg.Offline {
-				if _, statErr := os.Stat(targetPath); statErr != nil {
-					fmt.Printf("Syncing target module for signature check...\n")
-					syncBranch := cfg.GetBranchForRepo(targetRepo, branch)
-					_, syncErr := targetMgr.SyncBranch(targetRepo, fmt.Sprintf("%s/%s/%s.git", cfg.Gitea.URL, targetOwner, targetRepo), syncBranch)
-					if syncErr != nil {
-						fmt.Fprintf(os.Stderr, "  warn: failed to sync target module: %v\n", syncErr)
-					}
+		targetPath := sources[0].mgr.GetRepoPath(sources[0].repoName)
+		if _, statErr := os.Stat(targetPath); statErr == nil {
+			for _, name := range funcNames {
+				sig, sigErr := analysis.ParseSignature(targetPath, name)
+				if sigErr != nil {
+					fmt.Fprintf(os.Stderr, "  warn: could not parse signature for %q: %v\n", name, sigErr)
+					continue
 				}
-			}
-			if _, statErr := os.Stat(targetPath); statErr == nil {
-				for _, name := range funcNames {
-					sig, sigErr := analysis.ParseSignature(targetPath, name)
-					if sigErr != nil {
-						fmt.Fprintf(os.Stderr, "  warn: could not parse signature for %q: %v\n", name, sigErr)
-						continue
-					}
-					targetSigs[name] = sig
-					variadic := ""
-					if sig.IsVariadic {
-						variadic = "+"
-					}
-					fmt.Printf("Parsed signature for %q: %d params%s\n", name, sig.ParamsCount, variadic)
+				targetSigs[name] = sig
+				variadic := ""
+				if sig.IsVariadic {
+					variadic = "+"
 				}
-				fmt.Println()
-			} else if cfg.Offline {
-				fmt.Fprintf(os.Stderr, "  warn: target module %q not found in cache (%s), cannot check signatures offline\n", targetRepo, targetPath)
+				fmt.Printf("Parsed signature for %q: %d params%s\n", name, sig.ParamsCount, variadic)
 			}
+			fmt.Println()
+		} else if cfg.Offline {
+			fmt.Fprintf(os.Stderr, "  warn: target module %q not found in cache (%s), cannot check signatures offline\n", sources[0].repoName, targetPath)
 		}
 	}
 
@@ -309,6 +295,8 @@ type resolvedSource struct {
 	module     string
 	latestHash string
 	registry   analysis.ReturnTypeRegistry
+	mgr        *repo.Manager
+	repoName   string
 }
 
 // resolveSourceModule ensures the source repo is available and determines
@@ -320,9 +308,11 @@ func resolveSourceModule(s config.Source, cfg *config.Config, factory repo.Liste
 		return rs, rerr
 	}
 	rs.name = s.Label()
+	rs.mgr = res.Mgr
 
 	module := s.Module
 	repoName := res.Repos[0].Name
+	rs.repoName = repoName
 	repoPath := res.Mgr.GetRepoPath(repoName)
 
 	// Ensure the source repo is present so we can read go.mod when module is unset.

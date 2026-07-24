@@ -299,7 +299,10 @@ func ScanSymbolReferences(repoDir, targetModule, symbolName string, registry Ret
 // When a tagged site (DI or local-var/chain) and an untagged site share a
 // position, the tagged site is kept.
 func deduplicateSites(sites []CallSite) []CallSite {
-	type key struct{ file string; line, col int }
+	type key struct {
+		file      string
+		line, col int
+	}
 	seen := make(map[key]int, len(sites)) // key → index in result
 	result := make([]CallSite, 0, len(sites))
 	tagged := func(s CallSite) bool { return s.ViaField != "" || s.ViaLocalVar != "" || s.ViaLocalVarType != "" }

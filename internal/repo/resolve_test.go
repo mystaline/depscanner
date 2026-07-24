@@ -96,3 +96,30 @@ func TestResolvePathProvider(t *testing.T) {
 		t.Fatalf("repo path = %q, want %q", got.Mgr.GetRepoPath(filepath.Base(dir)), dir)
 	}
 }
+
+func TestResolveGiteaFlatCache(t *testing.T) {
+	fake := fakeLister{repos: []gitea.Repository{{Name: "svc-a"}, {Name: "svc-b"}}}
+	p := config.Provider{
+		FlatCache: "/flat",
+		Gitea:     &config.GiteaProvider{URL: "https://h", Token: "t", Org: "org-a"},
+	}
+	got, err := ResolveProvider(p, "/cache", false, func(string, string) Lister { return fake })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Group != "org-a" {
+		t.Fatalf("group = %q, want org-a", got.Group)
+	}
+	if got.Local {
+		t.Fatal("expected Local=false")
+	}
+	if len(got.Repos) != 2 {
+		t.Fatalf("repos = %+v, want 2 (svc-a, svc-b)", got.Repos)
+	}
+	if got.Mgr.GetOrgPath() != "/flat" {
+		t.Fatalf("GetOrgPath = %q, want /flat", got.Mgr.GetOrgPath())
+	}
+	if got.Mgr.GetRepoPath("svc-a") != "/flat/svc-a" {
+		t.Fatalf("GetRepoPath(svc-a) = %q, want /flat/svc-a", got.Mgr.GetRepoPath("svc-a"))
+	}
+}

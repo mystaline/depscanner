@@ -30,10 +30,18 @@ func ResolveProvider(p config.Provider, cacheDir string, offline bool, newLister
 	if err != nil {
 		return Resolved{}, err
 	}
+	baseDir := cacheDir
+	if p.FlatCache != "" {
+		baseDir = p.FlatCache
+	}
+	orgDir := ""
 	switch kind {
 	case "gitea":
 		g := p.Gitea
-		mgr := NewManager(cacheDir, g.Org)
+		if p.FlatCache == "" {
+			orgDir = g.Org
+		}
+		mgr := NewManager(baseDir, orgDir)
 		var repos []gitea.Repository
 		if offline {
 			repos, err = mgr.ListLocalRepos()
@@ -72,9 +80,14 @@ func ResolveProvider(p config.Provider, cacheDir string, offline bool, newLister
 			return Resolved{}, perr
 		}
 		group := host + "-" + owner
+		if p.FlatCache != "" {
+			orgDir = ""
+		} else {
+			orgDir = group
+		}
 		return Resolved{
 			Group: group,
-			Mgr:   NewManager(cacheDir, group),
+			Mgr:   NewManager(baseDir, orgDir),
 			Repos: []gitea.Repository{{Name: name, CloneURL: p.Git}},
 		}, nil
 

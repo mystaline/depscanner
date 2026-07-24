@@ -40,10 +40,11 @@ type GiteaProvider struct {
 // Provider is one location for a source or consumer: exactly one of
 // Gitea (org auto-discovery), Git (clone URL), or Path (local checkout).
 type Provider struct {
-	Name  string         `yaml:"name"`
-	Gitea *GiteaProvider `yaml:"gitea"`
-	Git   string         `yaml:"git"`
-	Path  string         `yaml:"path"`
+	Name      string         `yaml:"name"`
+	Gitea     *GiteaProvider `yaml:"gitea"`
+	Git       string         `yaml:"git"`
+	Path      string         `yaml:"path"`
+	FlatCache string         `yaml:"flat_cache"`
 }
 
 // Source is a source-of-truth module: a Provider plus an optional module path

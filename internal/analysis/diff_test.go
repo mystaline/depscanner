@@ -388,7 +388,7 @@ func TestDiffSortingByBreakingFirst(t *testing.T) {
 		"pkg.B": Symbol{Name: "B", Kind: KindFunc, Package: "pkg", IsExported: true},
 	}
 	new := SymbolIndex{
-		"pkg.A": Symbol{Name: "A", Kind: KindFunc, Package: "pkg", IsExported: true, BodyHash: "new1"}, // logic change
+		"pkg.A": Symbol{Name: "A", Kind: KindFunc, Package: "pkg", IsExported: true, BodyHash: "new1"},                   // logic change
 		"pkg.B": Symbol{Name: "B", Kind: KindFunc, Package: "pkg", IsExported: true, Params: []ParamInfo{{Type: "int"}}}, // signature changed
 	}
 

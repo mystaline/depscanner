@@ -18,10 +18,10 @@ func clearStaleLocks(repoPath string) {
 }
 
 const (
-	fetchMaxRetries  = 5
-	fetchRetryDelay  = 3 * time.Second
+	fetchMaxRetries = 5
+	fetchRetryDelay = 3 * time.Second
 	// 500 MB — prevents early EOF on large packs (git default is 1 MB)
-	httpPostBuffer   = 524288000
+	httpPostBuffer = 524288000
 )
 
 // unshallowTargetRepo deepens history for the given branches only.

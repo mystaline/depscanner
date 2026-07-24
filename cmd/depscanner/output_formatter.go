@@ -31,8 +31,9 @@ func (f *ansiFormatter) ColorBlue() string   { return "\033[34m" }
 func (f *ansiFormatter) ColorBold() string   { return "\033[1m" }
 func (f *ansiFormatter) ColorReset() string  { return "\033[0m" }
 
-func (f *ansiFormatter) Printf(format string, v ...interface{})               { fmt.Printf(format, v...) }
-func (f *ansiFormatter) Fprintf(w io.Writer, format string, v ...interface{}) { fmt.Fprintf(w, format, v...) }
-func (f *ansiFormatter) Fprintln(w io.Writer, v ...interface{})               { fmt.Fprintln(w, v...) }
-func (f *ansiFormatter) Println(v ...interface{})                              { fmt.Println(v...) }
-
+func (f *ansiFormatter) Printf(format string, v ...interface{}) { fmt.Printf(format, v...) }
+func (f *ansiFormatter) Fprintf(w io.Writer, format string, v ...interface{}) {
+	fmt.Fprintf(w, format, v...)
+}
+func (f *ansiFormatter) Fprintln(w io.Writer, v ...interface{}) { fmt.Fprintln(w, v...) }
+func (f *ansiFormatter) Println(v ...interface{})               { fmt.Println(v...) }

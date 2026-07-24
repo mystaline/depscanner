@@ -120,22 +120,22 @@ var dotMap map[int]DotType
 	}{
 		{"plain type", "SchedulerService", 4},
 		{"qualified type", "service.SchedulerService", 4},
-		{"plain struct (Config)", "Config", 9},             // field, param×2, var, composite×2, return, receiver return, composite in receiver
+		{"plain struct (Config)", "Config", 9}, // field, param×2, var, composite×2, return, receiver return, composite in receiver
 		{"qualified struct", "service.Config", 9},
-		{"plain interface (Validator)", "Validator", 2},     // field + global var
+		{"plain interface (Validator)", "Validator", 2}, // field + global var
 		{"qualified interface", "util.Validator", 2},
-		{"plain unused type", "Client", 1},                   // *svc.Client return
+		{"plain unused type", "Client", 1}, // *svc.Client return
 		{"qualified unused", "service.Client", 1},
-		{"pointer unwrap", "Item", 1},                        // []svc.Item in struct field
+		{"pointer unwrap", "Item", 1}, // []svc.Item in struct field
 		{"qualified pointer", "service.Item", 1},
-		{"map value type", "CacheEntry", 1},                  // map[string]svc.CacheEntry
+		{"map value type", "CacheEntry", 1}, // map[string]svc.CacheEntry
 		{"qualified map", "service.CacheEntry", 1},
-		{"chan type", "Event", 1},                            // chan svc.Event
+		{"chan type", "Event", 1}, // chan svc.Event
 		{"qualified chan", "service.Event", 1},
-		{"embedded type", "ExtConfig", 1},                    // svc.ExtConfig embedded
+		{"embedded type", "ExtConfig", 1}, // svc.ExtConfig embedded
 		{"qualified embedded", "service.ExtConfig", 1},
-		{"dot import type", "DotType", 6},                    // composite×2, var, assert, field, slice, map
-		{"qualified dot import", "dot.DotType", 0},           // dot has no qualifier
+		{"dot import type", "DotType", 6},          // composite×2, var, assert, field, slice, map
+		{"qualified dot import", "dot.DotType", 0}, // dot has no qualifier
 		{"nonexistent", "NoSuchType", 0},
 	}
 

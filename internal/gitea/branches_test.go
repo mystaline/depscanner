@@ -149,10 +149,10 @@ func TestGetBranchCommitHash(t *testing.T) {
 
 func TestListRepoBranches(t *testing.T) {
 	tests := []struct {
-		name          string
-		handler       http.HandlerFunc
+		name           string
+		handler        http.HandlerFunc
 		expectBranches []string
-		expectError   bool
+		expectError    bool
 	}{
 		{
 			name: "single page",
@@ -242,10 +242,10 @@ func TestListRepoBranches(t *testing.T) {
 
 func TestHasBranch(t *testing.T) {
 	tests := []struct {
-		name       string
-		branch     string
-		handler    http.HandlerFunc
-		expectHas  bool
+		name        string
+		branch      string
+		handler     http.HandlerFunc
+		expectHas   bool
 		expectError bool
 	}{
 		{
@@ -253,7 +253,7 @@ func TestHasBranch(t *testing.T) {
 			branch: "main",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				info := BranchInfo{
-					Name: "main",
+					Name:   "main",
 					Commit: BranchCommit{ID: "abc"},
 				}
 				w.Header().Set("Content-Type", "application/json")
@@ -302,7 +302,7 @@ func TestHasBranch(t *testing.T) {
 
 func TestParseModuleOwnerRepo(t *testing.T) {
 	tests := []struct {
-		modulePath string
+		modulePath  string
 		expectOwner string
 		expectRepo  string
 	}{

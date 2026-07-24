@@ -10,7 +10,7 @@ import (
 // WalkGoFiles performs a recursive traversal of the specified directory
 // and executes the provided function for every Go source file found.
 //
-// It automatically filters out irrelevant directories and files to speed up 
+// It automatically filters out irrelevant directories and files to speed up
 // the scanning process and avoid issues with dependency management.
 //
 // Filtered items:
