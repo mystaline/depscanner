@@ -32,6 +32,7 @@ type GiteaProvider struct {
 	URL          string   `yaml:"url"`
 	Token        string   `yaml:"token"`
 	Org          string   `yaml:"org"`
+	Repo         string   `yaml:"repo"`
 	IncludeRepos []string `yaml:"include_repos"`
 	ExcludeRepos []string `yaml:"exclude_repos"`
 }
@@ -134,6 +135,32 @@ func (p Provider) Group() (string, error) {
 	}
 }
 
+// Label returns a human-readable identifier for the source, used for
+// --source matching and output grouping. Falls back through Name, Repo,
+// single-element IncludeRepos, git URL repo component, and path basename.
+func (s Source) Label() string {
+	if s.Name != "" {
+		return s.Name
+	}
+	if s.Gitea != nil && s.Gitea.Repo != "" {
+		return s.Gitea.Repo
+	}
+	if s.Gitea != nil && len(s.Gitea.IncludeRepos) == 1 {
+		return s.Gitea.IncludeRepos[0]
+	}
+	if s.Git != "" {
+		_, _, repo, err := ParseGitURL(s.Git)
+		if err == nil {
+			return repo
+		}
+		return s.Git
+	}
+	if s.Path != "" {
+		return filepath.Base(strings.TrimRight(s.Path, "/"))
+	}
+	return ""
+}
+
 // Config holds all runtime configuration for depscanner.
 type Config struct {
 	Gitea             GiteaConfig       `yaml:"gitea"`
@@ -161,10 +188,32 @@ func (c *Config) Validate() error {
 		if _, err := s.Location(); err != nil {
 			return fmt.Errorf("source: %w", err)
 		}
+		if s.Gitea != nil {
+			g := s.Gitea
+			if g.Repo != "" && len(g.IncludeRepos) > 0 {
+				return fmt.Errorf("source %q: repo and include_repos are mutually exclusive; use repo for single target, include_repos for multi-repo scan", s.Label())
+			}
+			if g.Repo == "" && len(g.IncludeRepos) == 0 {
+				return fmt.Errorf("source %q: must set repo or include_repos to identify the target repository in org %s", s.Label(), g.Org)
+			}
+		}
 	}
 	for _, p := range c.Consumers {
 		if _, err := p.Location(); err != nil {
 			return fmt.Errorf("consumer: %w", err)
+		}
+	}
+	seen := map[string]int{}
+	for _, s := range c.Sources {
+		label := s.Label()
+		if label == "" {
+			continue
+		}
+		seen[label]++
+	}
+	for label, count := range seen {
+		if count > 1 {
+			fmt.Fprintf(os.Stderr, "warn: duplicate source label %q; use name: to disambiguate\n", label)
 		}
 	}
 	return nil
@@ -186,7 +235,7 @@ func (c *Config) normalize() {
 			owner, repoName := parseModuleOwner(c.TargetModule)
 			gp := *g
 			gp.Org = owner
-			gp.IncludeRepos = []string{repoName}
+			gp.Repo = repoName
 			src.Provider = Provider{Gitea: &gp}
 		}
 		c.Sources = []Source{src}
@@ -222,12 +271,13 @@ func parseModuleOwner(modulePath string) (owner, repo string) {
 //  2. ./depscanner.yaml (cwd)
 //  3. $HOME/.depscanner.yaml
 //  4. Defaults (no file at all)
+//
 // ${ENV_VAR} placeholders are expanded before YAML parsing.
 func Load(path string) (*Config, error) {
 	if path == "" {
 		// try cwd first
-		if _, err := os.Stat("depscanner.yaml"); err == nil {
-			path = "depscanner.yaml"
+		if _, err := os.Stat(".depscanner.yaml"); err == nil {
+			path = ".depscanner.yaml"
 		} else {
 			home, err := os.UserHomeDir()
 			if err != nil {
@@ -272,6 +322,25 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.normalize()
 	return &cfg, nil
+}
+
+// ResolveUnshallowBranches returns branches to unshallow, derived from
+// branch_tracking values plus an optional primary branch (from --branch).
+func (c *Config) ResolveUnshallowBranches(primary string) []string {
+	seen := map[string]bool{}
+	var branches []string
+
+	if primary != "" {
+		seen[primary] = true
+		branches = append(branches, primary)
+	}
+	for _, v := range c.BranchTracking {
+		if !seen[v] {
+			seen[v] = true
+			branches = append(branches, v)
+		}
+	}
+	return branches
 }
 
 func defaultUnshallowBranches() []string {

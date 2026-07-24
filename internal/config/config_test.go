@@ -1,8 +1,11 @@
 package config
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,7 +49,7 @@ branch_tracking:
 `
 
 	tmpdir := t.TempDir()
-	configPath := filepath.Join(tmpdir, "depscanner.yaml")
+	configPath := filepath.Join(tmpdir, ".depscanner.yaml")
 	err := os.WriteFile(configPath, []byte(configContent), 0644)
 	if err != nil {
 		t.Fatalf("failed to create temp config: %v", err)
@@ -94,7 +97,7 @@ cache_dir: "~/.depscanner/repos"
 	defer os.Unsetenv("GITEA_TOKEN")
 
 	tmpdir := t.TempDir()
-	configPath := filepath.Join(tmpdir, "depscanner.yaml")
+	configPath := filepath.Join(tmpdir, ".depscanner.yaml")
 	err := os.WriteFile(configPath, []byte(configContent), 0644)
 	if err != nil {
 		t.Fatalf("failed to create temp config: %v", err)
@@ -241,7 +244,7 @@ func TestLoadMultiOrgConfig(t *testing.T) {
 target_module: "gitea.example.com/lib/utils"
 `
 	tmpdir := t.TempDir()
-	configPath := filepath.Join(tmpdir, "depscanner.yaml")
+	configPath := filepath.Join(tmpdir, ".depscanner.yaml")
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -266,6 +269,98 @@ target_module: "gitea.example.com/lib/utils"
 	}
 	if len(cfg.Gitea.Orgs[1].ExcludeRepos) != 1 || cfg.Gitea.Orgs[1].ExcludeRepos[0] != "old" {
 		t.Errorf("Orgs[1].ExcludeRepos = %v, want [old]", cfg.Gitea.Orgs[1].ExcludeRepos)
+	}
+}
+
+func TestLabel(t *testing.T) {
+	cases := []struct {
+		s    Source
+		want string
+	}{
+		{Source{Provider: Provider{Name: "x", Path: "/p"}}, "x"},
+		{Source{Provider: Provider{Gitea: &GiteaProvider{Org: "o", Repo: "r"}}}, "r"},
+		{Source{Provider: Provider{Gitea: &GiteaProvider{Org: "o", IncludeRepos: []string{"r"}}}}, "r"},
+		{Source{Provider: Provider{Git: "https://h/o/r.git"}}, "r"},
+		{Source{Provider: Provider{Path: "/home/u/acme-core"}}, "acme-core"},
+	}
+	for _, c := range cases {
+		got := c.s.Label()
+		if got != c.want {
+			t.Errorf("Label(%+v) = %q, want %q", c.s, got, c.want)
+		}
+	}
+}
+
+func TestValidateSourceRepo(t *testing.T) {
+	// Repo set, IncludeRepos empty → no error
+	cfg := &Config{
+		Sources:   []Source{{Provider: Provider{Gitea: &GiteaProvider{Org: "o", Repo: "r"}}}},
+		Consumers: []Provider{{Path: "/tmp/svc"}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Repo set and IncludeRepos set → error
+	cfg2 := &Config{
+		Sources:   []Source{{Provider: Provider{Gitea: &GiteaProvider{Org: "o", Repo: "r", IncludeRepos: []string{"x"}}}}},
+		Consumers: []Provider{{Path: "/tmp/svc"}},
+	}
+	if err := cfg2.Validate(); err == nil {
+		t.Fatal("expected error for mutual exclusion")
+	}
+
+	// Repo empty, IncludeRepos empty → error
+	cfg3 := &Config{
+		Sources:   []Source{{Provider: Provider{Gitea: &GiteaProvider{Org: "o"}}}},
+		Consumers: []Provider{{Path: "/tmp/svc"}},
+	}
+	if err := cfg3.Validate(); err == nil {
+		t.Fatal("expected error for missing repo/include_repos")
+	}
+
+	// Git source, no gitea fields → no error
+	cfg4 := &Config{
+		Sources:   []Source{{Provider: Provider{Git: "https://h/o/r.git"}}},
+		Consumers: []Provider{{Path: "/tmp/svc"}},
+	}
+	if err := cfg4.Validate(); err != nil {
+		t.Fatalf("expected no error for git source, got: %v", err)
+	}
+
+	// Path source, no gitea fields → no error
+	cfg5 := &Config{
+		Sources:   []Source{{Provider: Provider{Path: "/tmp/core"}}},
+		Consumers: []Provider{{Path: "/tmp/svc"}},
+	}
+	if err := cfg5.Validate(); err != nil {
+		t.Fatalf("expected no error for path source, got: %v", err)
+	}
+}
+
+func TestDuplicateLabelWarn(t *testing.T) {
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	cfg := &Config{
+		Sources: []Source{
+			{Provider: Provider{Gitea: &GiteaProvider{Org: "org-a", Repo: "my-lib"}}},
+			{Provider: Provider{Gitea: &GiteaProvider{Org: "org-b", Repo: "my-lib"}}},
+		},
+		Consumers: []Provider{{Path: "/tmp/svc"}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	w.Close()
+
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	os.Stderr = old
+
+	if !strings.Contains(buf.String(), "duplicate source label") {
+		t.Errorf("expected stderr to contain duplicate label warning, got: %q", buf.String())
 	}
 }
 

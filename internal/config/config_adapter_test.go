@@ -31,6 +31,16 @@ target_module: gitea.example.com/org-a/acme-lib
 	if len(cfg.Sources) != 1 || cfg.Sources[0].Module != "gitea.example.com/org-a/acme-lib" {
 		t.Fatalf("sources = %+v", cfg.Sources)
 	}
+	g := cfg.Sources[0].Gitea
+	if g == nil {
+		t.Fatal("source has no gitea provider")
+	}
+	if g.Repo != "acme-lib" {
+		t.Errorf("Repo = %q, want %q", g.Repo, "acme-lib")
+	}
+	if len(g.IncludeRepos) != 0 {
+		t.Errorf("IncludeRepos should be empty, got %v", g.IncludeRepos)
+	}
 	if len(cfg.Consumers) != 1 || cfg.Consumers[0].Gitea == nil || cfg.Consumers[0].Gitea.Org != "org-a" {
 		t.Fatalf("consumers = %+v", cfg.Consumers)
 	}
