@@ -99,17 +99,28 @@ sources:
     #         Set it only if the go.mod path differs from the default.
     # module: "gitea.example.com/my-org/my-lib"
 
+    # flat_cache: Optional. Overrides cache layout for this provider.
+    #             Default: repos stored under <cache_dir>/<org>/<repo>.
+    #             When set, repos go directly under <flat_cache>/<repo>
+    #             (no org subdirectory). Useful when multiple providers
+    #             share a flat repo directory. Path/git providers ignore.
+    # flat_cache: "/shared/cache/repos"
+
   # Add more sources if you track multiple independent libraries.
-  # - gitea: { url: ..., token: ${GITEA_TOKEN}, org: another-org, repo: lib-two }
+  # - gitea: { url: ..., token: ${GITEA_TOKEN}, org: another-org, repo: lib_two }
 
 # ── CONSUMERS ───────────────────────────────────────────────────
 # The services/applications that might import your source library.
 # Depscanner scans every repo in these orgs for dependency usage.
 consumers:
   # Same fields as source (url, token, org).
-  # exclude_repos: Optional. Repos to skip (docs, config repos, etc.).
-  #                Supports glob patterns: *, ?, [...]
-  - gitea: { url: "https://gitea.example.com", token: "${GITEA_TOKEN}", org: "my-org", exclude_repos: [docs] }
+  # include_repos: Optional. Only scan these repos (whitelist). Supports glob.
+  # exclude_repos: Optional. Skip these repos (denylist). Supports glob.
+  #                When both set, exclude wins if a repo matches both.
+  - gitea: { url: "https://gitea.example.com", token: "${GITEA_TOKEN}", org: "my-org", include_repos: ["svc-*"] }
+
+    # flat_cache: Same as source — see above.
+    # flat_cache: "/shared/cache/repos"
 
   # Consumers can span different orgs or be local paths:
   # - gitea: { url: ..., token: ${GITEA_TOKEN}, org: partner-org, exclude_repos: [docs] }
@@ -160,6 +171,8 @@ Repos in output get one of these status indicators:
 Default `~/.depscanner/repos` is a throwaway clone cache — depscanner shallow-clones repos here, scans them, and you never touch these copies yourself. No `unshallow` needed.
 
 If your workspace already uses `<org>/<repo>` layout, point `cache_dir` at that workspace root (e.g. `~/Workspace/backend-codebase`) to avoid duplication. In that case you *are* working in those repos, so run `depscanner unshallow` to deepen history — otherwise `git pull` and `git log` will complain about shallow refs.
+
+Set `flat_cache` per provider to skip the org subdirectory — see inline docs in the config example above. Path and git providers ignore `flat_cache`.
 
 
 ## Usage
@@ -326,11 +339,16 @@ Tests include:
 
 ## Roadmap
 
-- [ ] **Multi-Language Support**: Extend analysis beyond Go (e.g., TypeScript/npm, Python/pip).
-- [ ] **Platform Agnostic**: Native integration with GitHub, GitLab, and Bitbucket APIs.
-- [ ] **Dependency Graph Visualization**: Interactive web-based UI to explore the impact graph.
-- [ ] **Automated PR Suggestions**: Propose Pull Requests for consumer repositories with suggested fixes for simple breaking changes.
-- [ ] **IDE Integration**: VS Code extension to show impact analysis directly in the editor.
+- [ ] **GitHub / GitLab / Bitbucket** — native org discovery APIs. (worth: high, effort: medium)
+- [ ] **Incremental scan** — skip repos unchanged since last scan. (worth: high, effort: low)
+- [ ] **TypeScript / npm** — full AST parsing, module resolution, import graph. (worth: high, effort: very high ~3-4x Go)
+- [ ] **diff --format json** — `impact` has it, `diff` doesn't. (worth: medium, effort: trivial)
+- [ ] ~~**CI/CD integration** — GitHub Action, GitLab CI template. (worth: medium, effort: medium)~~
+- [ ] ~~**HTML report** — single-file collapsible report. (worth: low, effort: medium)~~
+- [ ] ~~**Plugin system** — external language analyzers. (worth: unknown, effort: high)~~
+- [ ] ~~**Dependency graph viz** — interactive web UI. (worth: low, effort: high)~~
+- [ ] ~~**Automated PR suggestions** — propose fix PRs. (worth: unknown, effort: high)~~
+- [ ] ~~**IDE extension** — VS Code / JetBrains preview. (worth: low, effort: high)~~
 
 ## License
 

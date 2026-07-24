@@ -29,6 +29,13 @@ sources:
     #         Set it only if the go.mod path differs from the default.
     # module: "gitea.example.com/my-org/my-lib"
 
+    # flat_cache: Optional. Overrides cache layout for this provider.
+    #             Default: repos stored under <cache_dir>/<org>/<repo>.
+    #             When set, repos go directly under <flat_cache>/<repo>
+    #             (no org subdirectory). Useful when multiple providers
+    #             share a flat repo directory. Path/git providers ignore.
+    # flat_cache: "/shared/cache/repos"
+
   # Add more sources if you track multiple independent libraries.
   # Each source = one shared library in one repo.
   # - gitea: { url: ..., token: ${GITEA_TOKEN}, org: another-org, repo: lib-two }
@@ -39,9 +46,13 @@ sources:
 # Depscanner scans every repo in these orgs for dependency usage.
 consumers:
   # Same fields as source (url, token, org).
-  # exclude_repos: Optional. Repos to skip (docs, config repos, etc.).
-  #                Supports glob patterns: *, ?, [...]
-  - gitea: { url: "https://gitea.example.com", token: "${GITEA_TOKEN}", org: "my-org", exclude_repos: [docs] }
+  # include_repos: Optional. Only scan these repos (whitelist). Supports glob.
+  # exclude_repos: Optional. Skip these repos (denylist). Supports glob.
+  #                When both set, exclude wins if a repo matches both.
+  - gitea: { url: "https://gitea.example.com", token: "${GITEA_TOKEN}", org: "my-org", include_repos: ["svc-*"] }
+
+    # flat_cache: Same as source — see above.
+    # flat_cache: "/shared/cache/repos"
 
   # Consumers can span different orgs or be local paths:
   # - gitea: { url: ..., token: ${GITEA_TOKEN}, org: partner-org, exclude_repos: [docs] }

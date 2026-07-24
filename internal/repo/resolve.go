@@ -67,6 +67,9 @@ func ResolveProvider(p config.Provider, cacheDir string, offline bool, newLister
 				}
 			}
 			if !found {
+				if len(repos) == 0 {
+					return Resolved{}, fmt.Errorf("repo %q not found in org %q — API returned 0 repos (check token, URL, and org name)", g.Repo, g.Org)
+				}
 				return Resolved{}, fmt.Errorf("repo %q not found in org %q (%d repos total)", g.Repo, g.Org, len(repos))
 			}
 		} else {
